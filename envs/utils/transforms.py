@@ -200,11 +200,21 @@ def estimate_rigid_transform(P:np.ndarray, Q:np.ndarray):
     '''
         estimate rigid transform from point list P to point list Q
     '''
-    assert P.shape == Q.shape
+    P = np.asarray(P, dtype=np.float64)
+    Q = np.asarray(Q, dtype=np.float64)
+    if P.shape != Q.shape or P.ndim != 2 or P.shape[0] == 0 or P.shape[1] != 3:
+        return np.eye(4)
+    valid = np.isfinite(P).all(axis=1) & np.isfinite(Q).all(axis=1)
+    P = P[valid]
+    Q = Q[valid]
+    if P.shape[0] == 0:
+        return np.eye(4)
     n, dim = P.shape
     centeredP = P - P.mean(axis=0)
     centeredQ = Q - Q.mean(axis=0)
     C = np.dot(np.transpose(centeredP), centeredQ) / n
+    if not np.isfinite(C).all():
+        return np.eye(4)
 
     try:
         V, S, W = np.linalg.svd(C)

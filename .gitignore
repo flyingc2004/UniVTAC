@@ -53,3 +53,18 @@ textures.zip
 **/act-ckpt/*
 /*.png
 **/tmp.png
+
+# Local runtime/cache dirs for headless Isaac Sim smoke tests.
+/.cache/
+/.config/
+/.home/
+/.local/
+/.matplotlib/
+/.runtime/
+/setup_logs/
+
+# Local install/build artifacts.
+/third_party/IsaacLab-v2.1.1.tar.gz
+/third_party/IsaacLab/
+/third_party/TacEx/source/tacex_uipc/build.failed_*/
+/third_party/TacEx/source/tacex_uipc/overlay-ports/tinygltf/

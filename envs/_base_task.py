@@ -828,18 +828,29 @@ class BaseTask(UipcRLEnv):
         self.take_action_cnt += 1
         self.logger.info(f"step: {self.take_action_cnt} / {self.cfg.step_lim}")
 
+        if action_type in ['ee', 'delta_ee']:
+            if isinstance(action, torch.Tensor):
+                action_np = action.detach().cpu().numpy().astype(np.float32).reshape(-1)
+            else:
+                action_np = np.asarray(action, dtype=np.float32).reshape(-1)
+        else:
+            if isinstance(action, torch.Tensor):
+                action = action.to(self.device).float().flatten()
+            else:
+                action = torch.as_tensor(action, dtype=torch.float32, device=self.device).flatten()
+
         if action_type == 'ee':
-            target_pose = Pose(p=action[:3], q=action[3:7])
-            target_gripper_pos = action[7:]
+            target_pose = Pose(p=action_np[:3], q=action_np[3:7])
+            target_gripper_pos = float(action_np[7])
             exec_success = self.move([
                 Action(action='all', target_pose=target_pose, target_gripper_pos=target_gripper_pos)
             ], delay=False)
         elif action_type == 'delta_ee':
             ee_pose = self._robot_manager.get_ee_pose()
-            ee_next_pose = ee_pose.add_bias(action[:3], coord='world')\
-                .add_rotation(euler=action[3:6].tolist(), coord='world')
+            ee_next_pose = ee_pose.add_bias(action_np[:3], coord='world')\
+                .add_rotation(euler=action_np[3:6], coord='world')
             gripper_pos = self._robot_manager.get_gripper_qpos()
-            gripper_next_pos = gripper_pos + action[6]
+            gripper_next_pos = float(gripper_pos + action_np[6])
             exec_success = self.move([
                 Action(action='all', target_pose=ee_next_pose, target_gripper_pos=gripper_next_pos)
             ], delay=False)

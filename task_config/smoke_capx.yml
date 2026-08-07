@@ -1,0 +1,33 @@
+save_dir: ./data
+
+decimation: 1
+
+save_frequency: 2
+video_frequency: 0
+render_frequency: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 1
+start_seed: 0
+max_seed: 0
+
+sensor_type: gsmini
+reset_time_limit: 90
+step_lim: 120
+max_save_frames: 300
+skip_pre_move_render: false
+debug_pre_move: true
+defer_auto_observation: true
+record_initial_frame: false
+record_action_frames: true
+record_pre_move_frames: true
+video_frame_stride: 1
+record_action_tactile: false
+
+observations:
+  camera: ['rgb']
+  tactile: ['rgb', 'rgb_marker', 'marker', 'depth', 'pose']
+  embodiment: ['joint', 'ee']
+  actor: true

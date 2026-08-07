@@ -13,7 +13,7 @@ load_env() {
     source ${conda_base}/etc/profile.d/conda.sh
 
     # step 1: create conda environment
-    is_conda_env_exists=$(conda env list | grep ${CONDA_ENV_NAME})
+    is_conda_env_exists=$(conda env list | grep ${CONDA_ENV_NAME} || true)
     if [ -z "$is_conda_env_exists" ]; then
         echo "Creating conda environment '${CONDA_ENV_NAME}'..."
         conda create -n ${CONDA_ENV_NAME} python=3.10 -y
@@ -60,7 +60,11 @@ if ${pip_exe} show isaaclab >/dev/null 2>&1; then
 else
     echo "Installing isaaclab..."
     # install dependencies via apt (Ubuntu)
-    sudo apt install cmake build-essential
+    if dpkg -s cmake build-essential >/dev/null 2>&1; then
+        echo "cmake and build-essential are already installed. Skipping apt installation..."
+    else
+        sudo apt install cmake build-essential
+    fi
 
     cd third_party
     if [ -d "IsaacLab" ]; then
@@ -69,7 +73,11 @@ else
         git clone https://github.com/isaac-sim/IsaacLab
         cd IsaacLab
     fi
-    git checkout v2.1.1
+    if [ -d ".git" ]; then
+        git checkout v2.1.1
+    else
+        echo "IsaacLab source is not a Git checkout. Assuming v2.1.1 tarball source..."
+    fi
     ${uv_exe} pip install flatdict==4.0.1 --no-build-isolation
     ./isaaclab.sh --install
     cd ../..
@@ -80,7 +88,11 @@ if ${pip_exe} show nvidia_curobo >/dev/null 2>&1; then
     echo "curobo is already installed. Skipping installation..."
 else
     echo "Installing curobo..."
-    sudo apt install git-lfs
+    if dpkg -s git-lfs >/dev/null 2>&1; then
+        echo "git-lfs is already installed. Skipping apt installation..."
+    else
+        sudo apt install git-lfs
+    fi
     
     cd third_party
     if [ -d "curobo" ]; then
@@ -134,9 +146,9 @@ else
 
     current_dir=$(pwd)
 
-    if [ -d "Toolchain" ]; then
-        echo "Toolchain directory already exists. Skipping cloning vcpkg..."
-        mkdir ~/Toolchain
+    if [ ! -d "$HOME/Toolchain/vcpkg" ]; then
+        echo "Toolchain directory does not exist. Cloning vcpkg..."
+        mkdir -p ~/Toolchain
         cd ~/Toolchain
         git clone https://github.com/microsoft/vcpkg.git
         cd vcpkg
