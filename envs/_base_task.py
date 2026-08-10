@@ -99,6 +99,7 @@ class BaseTaskCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1/120,
         render_interval=decimation,
+        enable_scene_query_support=True,
         # device="cpu",
         physx=PhysxCfg(
             enable_ccd=True,  # needed for more stable ball_rolling
