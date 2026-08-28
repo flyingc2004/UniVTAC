@@ -3,7 +3,6 @@ import sys
 import time
 import yaml
 import json
-import torch
 import argparse
 import traceback
 from pathlib import Path
@@ -82,7 +81,10 @@ task_config, task_config_file = get_config(
     type='yaml'
 )
 
-if task_config.get('render_frequency', 1) == 0:
+args_cli.headless = task_config.get("headless", getattr(args_cli, "headless", True))
+args_cli.livestream = task_config.get("livestream", getattr(args_cli, "livestream", 0))
+
+if task_config.get('render_frequency', 1) == 0 and "livestream" not in task_config:
     args_cli.livestream = 2
 
 # launch omniverse app, must done before importing anything from omni.isaac
@@ -188,6 +190,9 @@ def main():
     env_cfg.render_frequency = task_config.get("render_frequency", env_cfg.render_frequency)
     env_cfg.obs_data_type = task_config.get("observations", {})
     env_cfg.random_texture = task_config.get("random_texture", False)
+    env_cfg.reset_time_limit = task_config.get("reset_time_limit", env_cfg.reset_time_limit)
+    env_cfg.step_lim = task_config.get("step_lim", env_cfg.step_lim)
+    env_cfg.max_save_frames = task_config.get("max_save_frames", env_cfg.max_save_frames)
 
     env_cfg.scene.num_envs = 1
     

@@ -263,6 +263,8 @@ class VideoHandler:
             self.close()
  
     def write(self, frame:torch.Tensor):
+        if self.ffmpeg is None or self.ffmpeg.stdin is None:
+            return
         frame = frame.cpu().numpy()
         if frame.shape != self.video_size:
             frame = cv2.resize(frame, self.video_size)
@@ -277,6 +279,11 @@ class VideoHandler:
         self.video_path.unlink(missing_ok=True)
  
     def close(self, result:str=None):
+        if self.ffmpeg is None:
+            return
+        if self.ffmpeg.stdin is None:
+            self.ffmpeg = None
+            return
         self.ffmpeg.stdin.close()
         self.ffmpeg.wait()
         del self.ffmpeg

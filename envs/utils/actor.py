@@ -24,6 +24,7 @@ from tacex_uipc import (
 from uipc import Animation, builtin, view
 from uipc.constitution import SoftTransformConstraint, SoftPositionConstraint
 from uipc.geometry import GeometrySlot, SimplicialComplex
+from uipc.unit import GPa
 from tacex_uipc.utils import TetMeshCfg
 from .transforms import *
 from .._global import *
@@ -49,6 +50,8 @@ class ActorCfg(UipcObjectCfg):
     orientation_points: list = []
 
     constraint_strength_ratio: float = 100
+    friction_ratio: float | None = None
+    contact_resistance: float | None = None
 
 class Actor(UipcObject):
     cfg: ActorCfg
@@ -82,7 +85,18 @@ class Actor(UipcObject):
         return ret
 
     @classmethod
-    def from_usd_file(cls, task: 'BaseTask', name:str, asset_path, pose:Pose, constitution_cfg=None, density=1e3):
+    def from_usd_file(
+        cls,
+        task: 'BaseTask',
+        name:str,
+        asset_path,
+        pose:Pose,
+        constitution_cfg=None,
+        density=1e3,
+        scale: tuple[float, float, float] | None = None,
+        friction_ratio: float | None = None,
+        contact_resistance: float | None = None,
+    ):
         asset_path = Path(asset_path)
         if not asset_path.is_absolute():
             asset_path = OBJECTS_ROOT / asset_path
@@ -95,13 +109,38 @@ class Actor(UipcObject):
             init_state=AssetBaseCfg.InitialStateCfg(pos=pose.p, rot=pose.q),
             spawn=sim_utils.UsdFileCfg(
                 usd_path=asset_path,
+                scale=scale,
                 mass_props=sim_utils.MassPropertiesCfg(density=density),
             ),
             constitution_cfg=UipcObjectCfg.AffineBodyConstitutionCfg() \
                 if constitution_cfg is None else constitution_cfg,
             mass_density=density,
+            friction_ratio=friction_ratio,
+            contact_resistance=contact_resistance,
         )
         return cls(task, cfg)
+
+    def _create_constitutions(self, mesh):
+        super()._create_constitutions(mesh)
+
+        if self.cfg.friction_ratio is None:
+            return
+
+        contact_tabular = self._uipc_sim.scene.contact_tabular()
+        default_element = contact_tabular.default_element()
+        contact_element = contact_tabular.create(f"{self.cfg.name}_contact")
+        resistance = (
+            self.cfg.contact_resistance
+            if self.cfg.contact_resistance is not None
+            else self._uipc_sim.cfg.contact.default_contact_resistance
+        )
+        contact_tabular.insert(
+            contact_element,
+            default_element,
+            friction_rate=float(self.cfg.friction_ratio),
+            resistance=float(resistance) * GPa,
+        )
+        contact_element.apply_to(mesh)
 
     def get_pose(self, type:Literal['pose', 'matrix']='pose'):
         mat = estimate_rigid_transform(self.origin_surf_pts, self.vertices)
@@ -254,10 +293,24 @@ class ActorManager:
         self.task = task
         self.actors: dict[str, Actor] = {}
 
-    def add_from_usd_file(self, name:str, asset_path:str, pose:Pose, constitution_cfg=None, density=1e3):
+    def add_from_usd_file(
+        self,
+        name:str,
+        asset_path:str,
+        pose:Pose,
+        constitution_cfg=None,
+        density=1e3,
+        scale: tuple[float, float, float] | None = None,
+        friction_ratio: float | None = None,
+        contact_resistance: float | None = None,
+    ):
         actor = Actor.from_usd_file(
             self.task, name, asset_path, pose,
-            constitution_cfg=constitution_cfg, density=density
+            constitution_cfg=constitution_cfg,
+            density=density,
+            scale=scale,
+            friction_ratio=friction_ratio,
+            contact_resistance=contact_resistance,
         )
         self.actors[actor.cfg.name] = actor
         return actor
@@ -271,6 +324,17 @@ class ActorManager:
     def update(self, dt):
         for actor in self.actors.values():
             actor.update(dt=dt)
+
+    def sync_visuals(self):
+        for actor in self.actors.values():
+            sync_visuals = getattr(actor, "sync_visuals", None)
+            if callable(sync_visuals):
+                sync_visuals()
+                continue
+            try:
+                actor.update(dt=0.0)
+            except Exception:
+                pass
     
     def remove_animate(self):
         for actor in self.actors.values():
