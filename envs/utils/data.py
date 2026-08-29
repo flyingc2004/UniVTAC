@@ -239,6 +239,7 @@ class HDF5Handler:
 class VideoHandler:
     def __init__(self):
         self.ffmpeg = None
+        self.frame_count = 0
         
     def reset(self, video_path, video_size):
         if self.ffmpeg is not None:
@@ -247,6 +248,7 @@ class VideoHandler:
         self.video_path = Path(video_path)
         self.video_path.parent.mkdir(parents=True, exist_ok=True)
         self.video_size = video_size
+        self.frame_count = 0
         w, h = video_size
         self.ffmpeg = subprocess.Popen([
             "ffmpeg", "-y", "-loglevel", "error",
@@ -269,6 +271,7 @@ class VideoHandler:
         if frame.shape != self.video_size:
             frame = cv2.resize(frame, self.video_size)
         self.ffmpeg.stdin.write(frame.tobytes())
+        self.frame_count += 1
         # cv2.putText(frame, f'Streaming [{self.video_path.stem}]', (10, 30),
         #             cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 2)
         # self.stream.stdin.write(frame.tobytes())
@@ -291,6 +294,11 @@ class VideoHandler:
         # self.stream.stdin.close()
         # self.stream.wait()
         # del self.stream
+
+        if self.frame_count == 0:
+            self.video_path.unlink(missing_ok=True)
+            self.ffmpeg = None
+            return
 
         if result is not None:
             new_name = self.video_path.parent / f"{self.video_path.stem}_{result}.mp4"

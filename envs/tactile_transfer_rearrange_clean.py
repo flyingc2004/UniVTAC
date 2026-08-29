@@ -5,12 +5,10 @@ import numpy as np
 
 
 TACTILE_VARIANTS = {
-    # Start with one easy condition for task sanity. More material classes can be
-    # enabled after the collect expert is consistently above the sanity bar.
     "light_rough": {
         "label": "light-rough",
         "a": {"asset": "Can_d4cm.usd", "diameter": 4, "density": 300.0, "friction_ratio": 2.5},
-        "b": {"asset": "Can_d4cm.usd", "diameter": 4, "density": 300.0, "friction_ratio": 2.5},
+        "b": {"asset": "Can_d4cm.usd", "diameter": 4, "density": 450.0, "friction_ratio": 2.8},
     },
 }
 
@@ -33,7 +31,7 @@ class Task(BaseTask):
     }
     stash_xy = np.array([-1.0, -1.2], dtype=np.float64)
     can_rot = [1.0, 0.0, 0.0, 0.0]
-    xy_jitter = 0.01
+    xy_jitter = 0.02
     placement_xy_threshold = 0.035
     placement_z_threshold = 0.030
     lift_height_threshold = 0.020
@@ -48,6 +46,13 @@ class Task(BaseTask):
     release_retreat_z = 0.140
     transport_xy_step = 0.025
     descend_z_step = 0.008
+    mask_vision_after_object_a = True
+    reset_settle_steps_per_chunk = 40
+    reset_settle_max_chunks = 8
+    reset_settle_xy_threshold = 0.025
+    reset_settle_z_threshold = 0.020
+    capx_premove_role = "object_a"
+    capx_premove_time_dilation_factor = 0.5
 
     def __init__(
         self,
@@ -135,6 +140,9 @@ class Task(BaseTask):
     def _reset_episode_state(self):
         self.task_phase = "approach"
         self.active_role = None
+        self.vision_disabled = False
+        self.vision_disabled_step = None
+        self.vision_disabled_reason = None
         self.sequence_violation = False
         self.failure_stage = None
         self.tactile_timeline = []
@@ -181,11 +189,120 @@ class Task(BaseTask):
                 "transport_mode": "horizontal_then_descend",
                 "transport_xy_step": float(self.transport_xy_step),
                 "descend_z_step": float(self.descend_z_step),
+                "vision_mask_policy": "mask_agent_cameras_after_object_a",
+                "vision_disabled": False,
+                "vision_disabled_step": None,
+                "vision_disabled_reason": None,
             }
         )
 
     def pre_move(self):
+        self._settle_selected_objects_at_start()
+        if self.plan_success:
+            self._premove_near_object(self.capx_premove_role)
         self.delay(10)
+
+    def _premove_near_object(self, role_name: str) -> bool:
+        role_name = self._resolve_public_role(role_name)
+        if role_name is None:
+            return False
+
+        self.active_role = role_name
+        self.task_phase = f"{role_name}_premove"
+        self._sync_metadata()
+
+        if not self.move(self.atom.open_gripper(1.0), tag=f"{role_name}_premove_open", is_save=False):
+            self._mark_failure(f"{role_name}_premove_open_failed")
+            self.plan_success = False
+            return False
+
+        actor = self.objects[role_name]
+        grasp_pose = self._lift_can_style_grasp_pose(actor)
+        grasp_idx = actor.register_point(pose=grasp_pose, type="contact")
+        ok = self.move(
+            self.atom.grasp_actor(actor, contact_point_id=grasp_idx, is_close=False),
+            tag=f"{role_name}_premove_anchor",
+            time_dilation_factor=self.capx_premove_time_dilation_factor,
+            is_save=False,
+        )
+        if not ok:
+            self._mark_failure(f"{role_name}_premove_anchor_failed")
+            self.plan_success = False
+            return False
+
+        self.metadata["capx_premove_role"] = role_name
+        self.metadata["capx_premove_grasp_pose"] = grasp_pose.tolist()
+        self._sync_metadata()
+        return True
+
+    def _settle_selected_objects_at_start(self):
+        if not hasattr(self, "objects"):
+            return
+
+        max_xy_error = float("inf")
+        max_z_error = float("inf")
+        settle_steps = 0
+        for chunk_idx in range(self.reset_settle_max_chunks):
+            for role_name, actor in self.objects.items():
+                actor.set_pose(self.start_poses[role_name])
+
+            self.delay(self.reset_settle_steps_per_chunk, is_save=False)
+            settle_steps += self.reset_settle_steps_per_chunk
+
+            xy_errors = []
+            z_errors = []
+            for role_name, actor in self.objects.items():
+                actual_pose = actor.get_pose()
+                target_pose = self.start_poses[role_name]
+                xy_errors.append(float(np.linalg.norm(actual_pose.p[:2] - target_pose.p[:2])))
+                z_errors.append(float(abs(actual_pose.p[2] - target_pose.p[2])))
+            max_xy_error = max(xy_errors) if xy_errors else 0.0
+            max_z_error = max(z_errors) if z_errors else 0.0
+
+            print(
+                "[tactile-transfer] reset settle "
+                f"chunk={chunk_idx + 1} steps={settle_steps} "
+                f"max_xy_error={max_xy_error:.4f} max_z_error={max_z_error:.4f}"
+            )
+            if (
+                max_xy_error <= self.reset_settle_xy_threshold
+                and max_z_error <= self.reset_settle_z_threshold
+            ):
+                break
+
+        for actor in self.objects.values():
+            actor.remove_animate()
+
+        self.tactile_timeline = []
+        self.object_initial_z = {role: float(actor.get_pose().p[2]) for role, actor in self.objects.items()}
+        self.object_lift_hold_count = {"object_a": 0, "object_b": 0}
+        self.object_place_stable_count = {"object_a": 0, "object_b": 0}
+        self.object_lifted = {"object_a": False, "object_b": False}
+        self.object_placed = {"object_a": False, "object_b": False}
+
+        actual_start_poses = {role: actor.get_pose() for role, actor in self.objects.items()}
+        self.metadata.update(
+            {
+                "reset_settle_steps": int(settle_steps),
+                "reset_settle_max_xy_error": float(max_xy_error),
+                "reset_settle_max_z_error": float(max_z_error),
+                "object_a_actual_start_pose": actual_start_poses["object_a"].tolist(),
+                "object_b_actual_start_pose": actual_start_poses["object_b"].tolist(),
+                "object_actual_start_distance": float(
+                    np.linalg.norm(
+                        actual_start_poses["object_a"].p[:2] - actual_start_poses["object_b"].p[:2]
+                    )
+                ),
+            }
+        )
+        if (
+            max_xy_error > self.reset_settle_xy_threshold
+            or max_z_error > self.reset_settle_z_threshold
+        ):
+            self.plan_success = False
+            self._mark_failure("reset_pose_settle_failed")
+        else:
+            self._sync_metadata()
 
     def _play_once(self):
         if not self._transfer_object("object_a"):
@@ -197,6 +314,8 @@ class Task(BaseTask):
 
     def _transfer_object(self, role_name: str) -> bool:
         self.active_role = role_name
+        if role_name == "object_b" and self.mask_vision_after_object_a:
+            self._enable_vision_mask("object_b_phase")
 
         for attempt in range(self.max_transfer_attempts):
             if attempt > 0:
@@ -257,12 +376,132 @@ class Task(BaseTask):
         return True
 
     def _lift_can_style_grasp_pose(self, actor: Actor) -> Pose:
-        actor_pose = actor.get_pose()
+        return self._lift_can_style_grasp_pose_from_pose(actor.get_pose())
+
+    def _lift_can_style_grasp_pose_from_pose(self, actor_pose: Pose) -> Pose:
         target_pose = actor_pose.add_bias([-0.065, 0.0, -0.008])
         target_mat = target_pose.to_transformation_matrix()
         x_axis = target_mat[:3, 0].reshape(-1)
         grasp_mat = np.vstack([x_axis, np.cross(x_axis, [0, 0, 1]), [0, 0, 1]])
         return construct_grasp_pose(target_pose.p, grasp_mat[:3, 2], grasp_mat[:3, 0])
+
+    def _resolve_public_role(self, object_name: str) -> str | None:
+        key = str(object_name).strip().lower().replace(" ", "_")
+        aliases = {
+            "a": "object_a",
+            "first": "object_a",
+            "first_object": "object_a",
+            "object_a": "object_a",
+            "b": "object_b",
+            "second": "object_b",
+            "second_object": "object_b",
+            "object_b": "object_b",
+        }
+        if key in {"current", "current_object", "object", "can"}:
+            return "object_b" if self.object_placed.get("object_a", False) else "object_a"
+        return aliases.get(key)
+
+    def _resolve_public_slot(self, object_name: str) -> str | None:
+        key = str(object_name).strip().lower().replace(" ", "_")
+        aliases = {
+            "slot_a": "slot_a",
+            "target_a": "slot_a",
+            "a_slot": "slot_a",
+            "slot_b": "slot_b",
+            "target_b": "slot_b",
+            "b_slot": "slot_b",
+        }
+        if key in {"current_slot", "slot", "target"}:
+            return "slot_b" if self.object_placed.get("object_a", False) else "slot_a"
+        return aliases.get(key)
+
+    def begin_capx_role(self, object_name: str) -> dict:
+        role_name = self._resolve_public_role(object_name)
+        if role_name is None:
+            return {"ok": False, "message": f"unknown public role {object_name!r}"}
+        self.active_role = role_name
+        if not str(self.task_phase).startswith(role_name):
+            self.task_phase = f"{role_name}_capx"
+        if role_name == "object_b" and self.mask_vision_after_object_a and self.object_placed["object_a"]:
+            self._enable_vision_mask("object_b_phase")
+        self._sync_metadata()
+        return {
+            "ok": True,
+            "role": role_name,
+            "slot": "slot_b" if role_name == "object_b" else "slot_a",
+            "vision_disabled": bool(self.vision_disabled),
+        }
+
+    def get_public_regions(self) -> dict:
+        pickup_half_extents = [
+            float(self.xy_jitter + 0.035),
+            float(self.xy_jitter + 0.035),
+        ]
+        slot_half_extents = [0.045, 0.045]
+        pickup_low_z = 0.018
+        regions = {}
+        target_poses = getattr(self, "target_poses", {})
+        for role_name, pickup_name, slot_name in (
+            ("object_a", "pickup_a_region", "slot_a_region"),
+            ("object_b", "pickup_b_region", "slot_b_region"),
+        ):
+            start_xy = self.start_xy[role_name]
+            slot_xy = self.slot_xy[role_name]
+            target_pose = target_poses.get(role_name) if isinstance(target_poses, dict) else None
+            release_z = (
+                float(target_pose.p[2] + self.release_z_clearance)
+                if target_pose is not None
+                else float(0.021 + self.release_z_clearance)
+            )
+            regions[pickup_name] = {
+                "kind": "pickup",
+                "center_xy": [float(start_xy[0]), float(start_xy[1])],
+                "half_extents": pickup_half_extents,
+                "hover_z": float(self.safe_gripper_z),
+                "search_z_range": [pickup_low_z, float(self.safe_gripper_z)],
+                "description": f"coarse search region for {role_name}",
+            }
+            regions[slot_name] = {
+                "kind": "place",
+                "center_xy": [float(slot_xy[0]), float(slot_xy[1])],
+                "half_extents": slot_half_extents,
+                "hover_z": float(self.safe_gripper_z),
+                "release_z": release_z,
+                "search_z_range": [release_z, float(self.safe_gripper_z)],
+                "description": f"public placement region for {role_name}",
+            }
+        return regions
+
+    def get_public_grasp_actor(self, object_name: str):
+        role_name = self._resolve_public_role(object_name)
+        if role_name is None:
+            return None
+        return self.objects.get(role_name)
+
+    def get_public_grasp_pose(self, object_name: str, *, grasp_height: float = 0.04):
+        role_name = self._resolve_public_role(object_name)
+        if role_name is None:
+            raise KeyError(f"public grasp object {object_name!r} is not available")
+        self.begin_capx_role(role_name)
+        # Use the reset anchor instead of live actor tracking so B-stage visual
+        # masking does not become simulator-GT tracking.
+        anchor_pose = self.start_poses.get(role_name)
+        if anchor_pose is None:
+            anchor_pose = self.objects[role_name].get_pose()
+        grasp_pose = self._lift_can_style_grasp_pose_from_pose(anchor_pose)
+        return (
+            np.asarray(grasp_pose.p, dtype=np.float32),
+            np.asarray(grasp_pose.q, dtype=np.float32),
+        )
+
+    def make_public_grasp_pose(self, object_name: str, actor: Actor | None = None, *, grasp_height: float = 0.04):
+        role_name = self._resolve_public_role(object_name)
+        if role_name is None:
+            raise KeyError(f"public grasp object {object_name!r} is not available")
+        anchor_pose = self.start_poses.get(role_name)
+        if anchor_pose is None:
+            anchor_pose = self.objects[role_name].get_pose()
+        return self._lift_can_style_grasp_pose_from_pose(anchor_pose)
 
     def _lift_and_verify(self, role_name: str) -> bool:
         actor = self.objects[role_name]
@@ -399,11 +638,49 @@ class Task(BaseTask):
         self.metadata["failure_stage"] = stage
         self._sync_metadata()
 
+    def _enable_vision_mask(self, reason: str):
+        if getattr(self, "vision_disabled", False):
+            return
+        self.vision_disabled = True
+        self.vision_disabled_step = int(self.step_count)
+        self.vision_disabled_reason = reason
+        print(f"[tactile-transfer] vision mask enabled step={self.vision_disabled_step} reason={reason}")
+        self._sync_metadata()
+
     def _step(self, is_save: bool = True):
         ret = super()._step(is_save=is_save)
         self._update_task_state()
         self._record_tactile_timeline()
         return ret
+
+    def _get_observations(self):
+        obs = super()._get_observations()
+        if getattr(self, "vision_disabled", False):
+            self._mask_camera_observations(obs)
+        return obs
+
+    def _mask_camera_observations(self, obs: dict):
+        camera_obs = obs.get("observation", {})
+        for camera_name in list(camera_obs.keys()):
+            for data_type, value in list(camera_obs[camera_name].items()):
+                if isinstance(value, torch.Tensor):
+                    camera_obs[camera_name][data_type] = torch.zeros_like(value)
+                elif isinstance(value, np.ndarray):
+                    camera_obs[camera_name][data_type] = np.zeros_like(value)
+
+    def get_frame_shot(self, obs):
+        if not getattr(self, "vision_disabled", False):
+            return super().get_frame_shot(obs)
+        try:
+            unmasked_camera_obs = self._camera_manager.get_observations(["rgb"])
+            frame_obs = dict(obs)
+            frame_obs["observation"] = {
+                "head": {"rgb": unmasked_camera_obs["head"]["rgb"]},
+                "wrist": {"rgb": unmasked_camera_obs["wrist"]["rgb"]},
+            }
+            return super().get_frame_shot(frame_obs)
+        except Exception:
+            return super().get_frame_shot(obs)
 
     def _update_task_state(self):
         if not hasattr(self, "objects"):
@@ -465,6 +742,9 @@ class Task(BaseTask):
                 "sequence_violation": bool(self.sequence_violation),
                 "failure_stage": self.failure_stage,
                 "task_phase": self.task_phase,
+                "vision_disabled": bool(getattr(self, "vision_disabled", False)),
+                "vision_disabled_step": getattr(self, "vision_disabled_step", None),
+                "vision_disabled_reason": getattr(self, "vision_disabled_reason", None),
                 "object_live_distance": float(
                     np.linalg.norm(
                         self.objects["object_a"].get_pose().p[:2] - self.objects["object_b"].get_pose().p[:2]
@@ -491,6 +771,7 @@ class Task(BaseTask):
             "step": int(self.step_count),
             "phase": self.task_phase,
             "active_role": self.active_role,
+            "vision_disabled": bool(getattr(self, "vision_disabled", False)),
             "gripper_qpos": float(self._robot_manager.get_gripper_qpos()),
         }
         for role_name, actor in self.objects.items():
