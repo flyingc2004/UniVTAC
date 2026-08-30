@@ -22,12 +22,12 @@ class TaskCfg(BaseTaskCfg):
 
 class Task(BaseTask):
     start_xy = {
-        "object_a": np.array([0.58, -0.26], dtype=np.float64),
-        "object_b": np.array([0.68, 0.26], dtype=np.float64),
+        "object_a": np.array([0.68, 0.26], dtype=np.float64),
+        "object_b": np.array([0.58, -0.26], dtype=np.float64),
     }
     slot_xy = {
-        "object_a": np.array([0.42, -0.16], dtype=np.float64),
-        "object_b": np.array([0.42, 0.16], dtype=np.float64),
+        "object_a": np.array([0.42, 0.16], dtype=np.float64),
+        "object_b": np.array([0.42, -0.16], dtype=np.float64),
     }
     stash_xy = np.array([-1.0, -1.2], dtype=np.float64)
     can_rot = [1.0, 0.0, 0.0, 0.0]
@@ -48,7 +48,7 @@ class Task(BaseTask):
     descend_z_step = 0.008
     mask_vision_after_object_a = False
     b_occlusion_box_enabled = True
-    b_occlusion_inner_center_xy = np.array([0.68, 0.26], dtype=np.float64)
+    b_occlusion_inner_center_xy = np.array([0.58, -0.26], dtype=np.float64)
     b_occlusion_wall_height = 0.18
     b_occlusion_wall_thickness = 0.015
     b_occlusion_inner_width = 0.20
