@@ -46,7 +46,17 @@ class Task(BaseTask):
     release_retreat_z = 0.140
     transport_xy_step = 0.025
     descend_z_step = 0.008
-    mask_vision_after_object_a = True
+    mask_vision_after_object_a = False
+    b_occlusion_box_enabled = True
+    b_occlusion_inner_center_xy = np.array([0.68, 0.26], dtype=np.float64)
+    b_occlusion_wall_height = 0.18
+    b_occlusion_wall_thickness = 0.015
+    b_occlusion_inner_width = 0.20
+    b_occlusion_inner_depth = 0.20
+    b_occlusion_lid_enabled = True
+    b_occlusion_lid_height = 0.145
+    b_occlusion_lid_thickness = 0.012
+    b_occlusion_color = np.array([0.70, 0.72, 0.74], dtype=np.float32)
     reset_settle_steps_per_chunk = 40
     reset_settle_max_chunks = 8
     reset_settle_xy_threshold = 0.025
@@ -79,6 +89,7 @@ class Task(BaseTask):
             pose=Pose([self.slot_xy["object_b"][0], self.slot_xy["object_b"][1], 0.01], [1, 0, 0, 0]),
             density=1e5,
         )
+        self._create_b_occlusion_box()
 
         self.variant_actors: dict[tuple[str, str], Actor] = {}
         stash_idx = 0
@@ -189,12 +200,80 @@ class Task(BaseTask):
                 "transport_mode": "horizontal_then_descend",
                 "transport_xy_step": float(self.transport_xy_step),
                 "descend_z_step": float(self.descend_z_step),
-                "vision_mask_policy": "mask_agent_cameras_after_object_a",
+                "vision_mask_policy": "geometry_occlusion_for_object_b",
+                "b_occlusion_box_enabled": bool(self.b_occlusion_box_enabled),
+                "b_occlusion_inner_center_xy": self.b_occlusion_inner_center_xy.tolist(),
+                "b_occlusion_wall_height": float(self.b_occlusion_wall_height),
+                "b_occlusion_wall_thickness": float(self.b_occlusion_wall_thickness),
+                "b_occlusion_inner_width": float(self.b_occlusion_inner_width),
+                "b_occlusion_inner_depth": float(self.b_occlusion_inner_depth),
+                "b_occlusion_lid_enabled": bool(self.b_occlusion_lid_enabled),
+                "b_occlusion_lid_height": float(self.b_occlusion_lid_height),
+                "b_occlusion_lid_thickness": float(self.b_occlusion_lid_thickness),
                 "vision_disabled": False,
                 "vision_disabled_step": None,
                 "vision_disabled_reason": None,
             }
         )
+
+    def _create_b_occlusion_box(self):
+        if not self.b_occlusion_box_enabled:
+            self.b_occlusion_walls = []
+            return
+
+        center = np.asarray(self.b_occlusion_inner_center_xy, dtype=np.float64)
+        height = float(self.b_occlusion_wall_height)
+        thickness = float(self.b_occlusion_wall_thickness)
+        inner_width = float(self.b_occlusion_inner_width)
+        inner_depth = float(self.b_occlusion_inner_depth)
+        z_center = 0.018 + 0.5 * height
+        lid_z = float(self.b_occlusion_lid_height)
+        lid_thickness = float(self.b_occlusion_lid_thickness)
+        color = np.asarray(self.b_occlusion_color, dtype=np.float32)
+
+        wall_specs = [
+            (
+                "b_occlusion_back",
+                [center[0] + 0.5 * inner_depth + 0.5 * thickness, center[1], z_center],
+                [thickness, inner_width + 2.0 * thickness, height],
+            ),
+            (
+                "b_occlusion_left",
+                [center[0], center[1] - 0.5 * inner_width - 0.5 * thickness, z_center],
+                [inner_depth + thickness, thickness, height],
+            ),
+            (
+                "b_occlusion_right",
+                [center[0], center[1] + 0.5 * inner_width + 0.5 * thickness, z_center],
+                [inner_depth + thickness, thickness, height],
+            ),
+            (
+                "b_occlusion_camera_side_shield",
+                [center[0] - 0.015, center[1] + 0.5 * inner_width + 1.5 * thickness, z_center],
+                [inner_depth + 0.06, thickness, height],
+            ),
+        ]
+        if self.b_occlusion_lid_enabled:
+            wall_specs.append(
+                (
+                    "b_occlusion_lid",
+                    [center[0], center[1], lid_z],
+                    [inner_depth + thickness, inner_width + 2.0 * thickness, lid_thickness],
+                )
+            )
+
+        self.b_occlusion_walls = []
+        for name, position, scale in wall_specs:
+            wall = VisualCuboid(
+                prim_path=f"/World/envs/env_0/{name}",
+                name=name,
+                position=np.asarray(position, dtype=np.float32),
+                orientation=np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                scale=np.asarray(scale, dtype=np.float32),
+                size=1.0,
+                color=color,
+            )
+            self.b_occlusion_walls.append(wall)
 
     def pre_move(self):
         self._settle_selected_objects_at_start()
