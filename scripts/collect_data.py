@@ -75,6 +75,12 @@ def get_config(file, default_root:Path, type:Literal['yaml', 'json']):
             config = json.load(f)
         return config, file
 
+def get_bool_config(config: dict, key: str, default: bool = False) -> bool:
+    value = os.environ.get(f"UNIVTAC_{key.upper()}", config.get(key, default))
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
 task_config, task_config_file = get_config(
     args_cli.config, 
     default_root=Path(__file__).parent.parent / 'task_config', 
@@ -193,6 +199,19 @@ def main():
     env_cfg.reset_time_limit = task_config.get("reset_time_limit", env_cfg.reset_time_limit)
     env_cfg.step_lim = task_config.get("step_lim", env_cfg.step_lim)
     env_cfg.max_save_frames = task_config.get("max_save_frames", env_cfg.max_save_frames)
+    env_cfg.live_preview_enabled = get_bool_config(task_config, "live_preview_enabled", env_cfg.live_preview_enabled)
+    env_cfg.live_preview_path = os.environ.get(
+        "UNIVTAC_LIVE_PREVIEW_PATH",
+        task_config.get("live_preview_path", env_cfg.live_preview_path),
+    )
+    env_cfg.live_preview_stride = int(os.environ.get(
+        "UNIVTAC_LIVE_PREVIEW_STRIDE",
+        task_config.get("live_preview_stride", env_cfg.live_preview_stride),
+    ))
+    env_cfg.live_preview_jpeg_quality = int(os.environ.get(
+        "UNIVTAC_LIVE_PREVIEW_JPEG_QUALITY",
+        task_config.get("live_preview_jpeg_quality", env_cfg.live_preview_jpeg_quality),
+    ))
 
     env_cfg.scene.num_envs = 1
     
@@ -206,6 +225,8 @@ def main():
     log(f"Task Config: \n{json.dumps(task_config, ensure_ascii=False, indent=4)}\n{'-' * 20}\n")
     log(f"Env Config: \n{env_cfg}\n{'-' * 20}\n")
     log(f"Init cost {init_cost:.2f} seconds, devices: {os.environ.get('CUDA_VISIBLE_DEVICES')}")
+    if env_cfg.live_preview_enabled:
+        log(f"Live preview: {env_cfg.live_preview_path} stride={env_cfg.live_preview_stride}")
     run(
         task,
         episode_num=episode_num,

@@ -34,6 +34,11 @@ class Task(BaseTask):
     xy_jitter = 0.02
     placement_xy_threshold = 0.035
     placement_z_threshold = 0.030
+    placement_supported_z_threshold = 0.012
+    placement_mode = "pad_overlap"
+    pad_half_extents = np.array([0.045, 0.045], dtype=np.float64)
+    can_length = 0.120
+    placement_overlap_margin = 0.004
     lift_height_threshold = 0.020
     hold_steps_required = 8
     placement_stable_steps_required = 12
@@ -54,8 +59,8 @@ class Task(BaseTask):
     b_occlusion_inner_width = 0.20
     b_occlusion_inner_depth = 0.20
     b_occlusion_lid_enabled = True
-    b_occlusion_lid_height = 0.145
-    b_occlusion_lid_thickness = 0.012
+    b_occlusion_lid_height = 0.130
+    b_occlusion_lid_thickness = 0.020
     b_occlusion_color = np.array([0.70, 0.72, 0.74], dtype=np.float32)
     reset_settle_steps_per_chunk = 40
     reset_settle_max_chunks = 8
@@ -201,7 +206,12 @@ class Task(BaseTask):
                 "transport_xy_step": float(self.transport_xy_step),
                 "descend_z_step": float(self.descend_z_step),
                 "vision_mask_policy": "geometry_occlusion_for_object_b",
+                "placement_mode": str(self.placement_mode),
+                "pad_half_extents": self.pad_half_extents.tolist(),
+                "can_length": float(self.can_length),
+                "placement_overlap_margin": float(self.placement_overlap_margin),
                 "b_occlusion_box_enabled": bool(self.b_occlusion_box_enabled),
+                "b_occlusion_type": "visual_only_closed_box",
                 "b_occlusion_inner_center_xy": self.b_occlusion_inner_center_xy.tolist(),
                 "b_occlusion_wall_height": float(self.b_occlusion_wall_height),
                 "b_occlusion_wall_thickness": float(self.b_occlusion_wall_thickness),
@@ -235,6 +245,11 @@ class Task(BaseTask):
             (
                 "b_occlusion_back",
                 [center[0] + 0.5 * inner_depth + 0.5 * thickness, center[1], z_center],
+                [thickness, inner_width + 2.0 * thickness, height],
+            ),
+            (
+                "b_occlusion_front",
+                [center[0] - 0.5 * inner_depth - 0.5 * thickness, center[1], z_center],
                 [thickness, inner_width + 2.0 * thickness, height],
             ),
             (
@@ -516,7 +531,7 @@ class Task(BaseTask):
             float(self.xy_jitter + 0.035),
             float(self.xy_jitter + 0.035),
         ]
-        slot_half_extents = [0.045, 0.045]
+        slot_half_extents = np.asarray(self.pad_half_extents, dtype=np.float64).tolist()
         pickup_low_z = 0.018
         regions = {}
         target_poses = getattr(self, "target_poses", {})
@@ -802,8 +817,68 @@ class Task(BaseTask):
         target_pose = self.target_poses[role_name]
         xy_error = float(np.linalg.norm(actor_pose.p[:2] - target_pose.p[:2]))
         z_error = float(abs(actor_pose.p[2] - target_pose.p[2]))
-        gripper_open = self._robot_manager.get_gripper_qpos() > 0.020
-        return xy_error < self.placement_xy_threshold and z_error < self.placement_z_threshold and gripper_open
+        supported = bool(z_error < self.placement_supported_z_threshold)
+        held = bool(self._is_currently_held(role_name))
+        gripper_open = bool(self._robot_manager.get_gripper_qpos() > 0.020)
+        released_or_supported = bool(gripper_open or (supported and not held))
+        if str(self.placement_mode) == "pad_overlap":
+            on_pad = self._object_footprint_overlaps_pad(role_name)
+        else:
+            on_pad = xy_error < self.placement_xy_threshold
+        return bool(on_pad and supported and released_or_supported)
+
+    def _object_footprint_overlaps_pad(self, role_name: str) -> bool:
+        actor_pose = self.objects[role_name].get_pose()
+        target_pose = self.target_poses[role_name]
+        center_xy = np.asarray(actor_pose.p[:2], dtype=np.float64)
+        target_xy = np.asarray(target_pose.p[:2], dtype=np.float64)
+        variant = self.variants.get(role_name, {}) if hasattr(self, "variants") else {}
+        radius = 0.005 * float(variant.get("diameter", 4))
+        half_length = 0.5 * float(variant.get("length", self.can_length))
+        half_extents = np.asarray(self.pad_half_extents, dtype=np.float64)
+        expanded_half_extents = half_extents + radius + float(self.placement_overlap_margin)
+
+        transform = actor_pose.to_transformation_matrix()
+        axis_xy = np.asarray(transform[:2, 0], dtype=np.float64)
+        axis_norm = float(np.linalg.norm(axis_xy))
+        if axis_norm < 1e-6:
+            delta = np.abs(center_xy - target_xy)
+            return bool(np.all(delta <= expanded_half_extents))
+
+        axis_xy = axis_xy / axis_norm
+        p0 = center_xy - axis_xy * half_length
+        p1 = center_xy + axis_xy * half_length
+        return self._segment_intersects_aabb(p0, p1, target_xy, expanded_half_extents)
+
+    @staticmethod
+    def _segment_intersects_aabb(
+        p0: np.ndarray,
+        p1: np.ndarray,
+        box_center: np.ndarray,
+        box_half_extents: np.ndarray,
+    ) -> bool:
+        p0 = np.asarray(p0, dtype=np.float64) - np.asarray(box_center, dtype=np.float64)
+        p1 = np.asarray(p1, dtype=np.float64) - np.asarray(box_center, dtype=np.float64)
+        half = np.asarray(box_half_extents, dtype=np.float64)
+        delta = p1 - p0
+        t_min = 0.0
+        t_max = 1.0
+
+        for axis in range(2):
+            if abs(delta[axis]) < 1e-12:
+                if p0[axis] < -half[axis] or p0[axis] > half[axis]:
+                    return False
+                continue
+            inv_delta = 1.0 / delta[axis]
+            t1 = (-half[axis] - p0[axis]) * inv_delta
+            t2 = (half[axis] - p0[axis]) * inv_delta
+            if t1 > t2:
+                t1, t2 = t2, t1
+            t_min = max(t_min, t1)
+            t_max = min(t_max, t2)
+            if t_min > t_max:
+                return False
+        return True
 
     def _sync_metadata(self):
         if not hasattr(self, "objects"):
@@ -834,9 +909,22 @@ class Task(BaseTask):
         for role_name, actor in self.objects.items():
             pose = actor.get_pose()
             target = self.target_poses[role_name]
+            xy_error = float(np.linalg.norm(pose.p[:2] - target.p[:2]))
+            z_error = float(abs(pose.p[2] - target.p[2]))
+            supported = bool(z_error < self.placement_supported_z_threshold)
+            held = bool(self._is_currently_held(role_name))
+            gripper_open = bool(self._robot_manager.get_gripper_qpos() > 0.020)
+            on_pad = bool(self._object_footprint_overlaps_pad(role_name))
             self.metadata[f"{role_name}_pose"] = pose.tolist()
-            self.metadata[f"{role_name}_xy_error"] = float(np.linalg.norm(pose.p[:2] - target.p[:2]))
-            self.metadata[f"{role_name}_z_error"] = float(abs(pose.p[2] - target.p[2]))
+            self.metadata[f"{role_name}_xy_error"] = xy_error
+            self.metadata[f"{role_name}_z_error"] = z_error
+            self.metadata[f"{role_name}_on_pad"] = on_pad
+            self.metadata[f"{role_name}_placement_supported"] = supported
+            self.metadata[f"{role_name}_placement_held"] = held
+            self.metadata[f"{role_name}_placement_gripper_open"] = gripper_open
+            self.metadata[f"{role_name}_placement_stable_count"] = int(
+                self.object_place_stable_count.get(role_name, 0)
+            )
 
     def _record_tactile_timeline(self):
         if not hasattr(self, "tactile_timeline") or self.step_count % self.timeline_frequency != 0:

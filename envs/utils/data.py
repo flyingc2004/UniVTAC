@@ -240,6 +240,20 @@ class VideoHandler:
     def __init__(self):
         self.ffmpeg = None
         self.frame_count = 0
+        self.live_preview_enabled = False
+        self.live_preview_path = None
+        self.live_preview_stride = 5
+        self.live_preview_jpeg_quality = 80
+        self.live_preview_size = None
+
+    def configure_preview(self, enabled=False, path=None, stride=5, jpeg_quality=80, frame_size=None):
+        self.live_preview_enabled = bool(enabled and path)
+        self.live_preview_path = Path(path) if self.live_preview_enabled else None
+        self.live_preview_stride = max(1, int(stride))
+        self.live_preview_jpeg_quality = int(np.clip(jpeg_quality, 1, 100))
+        self.live_preview_size = frame_size
+        if self.live_preview_enabled:
+            self.live_preview_path.parent.mkdir(parents=True, exist_ok=True)
         
     def reset(self, video_path, video_size):
         if self.ffmpeg is not None:
@@ -248,6 +262,7 @@ class VideoHandler:
         self.video_path = Path(video_path)
         self.video_path.parent.mkdir(parents=True, exist_ok=True)
         self.video_size = video_size
+        self.live_preview_size = video_size
         self.frame_count = 0
         w, h = video_size
         self.ffmpeg = subprocess.Popen([
@@ -259,19 +274,48 @@ class VideoHandler:
             "-movflags", "+faststart",
             str(self.video_path)
         ], stdin=subprocess.PIPE)
+
+    def _prepare_frame(self, frame):
+        if isinstance(frame, torch.Tensor):
+            frame = frame.detach().cpu().numpy()
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255)
+            if frame.max(initial=0) <= 1.0:
+                frame = frame * 255
+            frame = frame.astype(np.uint8)
+        if self.live_preview_size is not None:
+            w, h = self.live_preview_size
+            if frame.shape[:2] != (h, w):
+                frame = cv2.resize(frame, (w, h))
+        return np.ascontiguousarray(frame)
+
+    def write_preview(self, frame):
+        if not self.live_preview_enabled or self.live_preview_path is None:
+            return
+        frame = self._prepare_frame(frame)
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame_bgr,
+            [int(cv2.IMWRITE_JPEG_QUALITY), self.live_preview_jpeg_quality],
+        )
+        if not ok:
+            return
+        tmp_path = self.live_preview_path.with_name(self.live_preview_path.name + ".tmp")
+        tmp_path.write_bytes(encoded.tobytes())
+        os.replace(tmp_path, self.live_preview_path)
     
     def __del__(self):
         if self.ffmpeg is not None:
             self.close()
  
     def write(self, frame:torch.Tensor):
-        if self.ffmpeg is None or self.ffmpeg.stdin is None:
-            return
-        frame = frame.cpu().numpy()
-        if frame.shape != self.video_size:
-            frame = cv2.resize(frame, self.video_size)
-        self.ffmpeg.stdin.write(frame.tobytes())
+        frame = self._prepare_frame(frame)
+        if self.ffmpeg is not None and self.ffmpeg.stdin is not None:
+            self.ffmpeg.stdin.write(frame.tobytes())
         self.frame_count += 1
+        if self.frame_count % self.live_preview_stride == 0:
+            self.write_preview(frame)
         # cv2.putText(frame, f'Streaming [{self.video_path.stem}]', (10, 30),
         #             cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 2)
         # self.stream.stdin.write(frame.tobytes())

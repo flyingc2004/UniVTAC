@@ -1,0 +1,31 @@
+save_dir: ./data
+
+decimation: 1
+
+save_frequency: 1
+video_frequency: 4
+render_frequency: 0
+headless: true
+livestream: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 1
+start_seed: 0
+max_seed: 0
+
+sensor_type: gsmini
+reset_time_limit: 900
+step_lim: 500
+max_save_frames: 5000
+live_preview_enabled: true
+live_preview_path: ./data/latest_preview.jpg
+live_preview_stride: 5
+live_preview_jpeg_quality: 80
+
+observations:
+  camera: ['rgb', 'depth']
+  tactile: ['rgb', 'rgb_marker', 'marker', 'depth', 'pose']
+  embodiment: ['joint', 'ee']
+  actor: true

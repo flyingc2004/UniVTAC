@@ -91,6 +91,10 @@ class BaseTaskCfg(DirectRLEnvCfg):
     video_frequency = 1
     render_frequency = 0
     video_size = (960, 320)
+    live_preview_enabled: bool = False
+    live_preview_path: str = "./data/latest_preview.jpg"
+    live_preview_stride: int = 5
+    live_preview_jpeg_quality: int = 80
 
     ui_window_class_type = BaseEnvWindow
 
@@ -376,6 +380,13 @@ class BaseTask(UipcRLEnv):
                 f'Timeout: reset exceed time limit of {self.cfg.reset_time_limit} s, cost {total_cost} s.'
             )
 
+        self.video_handler.configure_preview(
+            enabled=self.cfg.live_preview_enabled,
+            path=self.cfg.live_preview_path,
+            stride=self.cfg.live_preview_stride,
+            jpeg_quality=self.cfg.live_preview_jpeg_quality,
+            frame_size=self.cfg.video_size,
+        )
         if self.cfg.video_frequency > 0:
             self.video_handler.reset(self.save_video_path, self.cfg.video_size)
         if instructions is not None:
@@ -543,16 +554,22 @@ class BaseTask(UipcRLEnv):
         save_freq = (self.cfg.video_frequency > 0 and self.step_count % self.cfg.save_frequency == 0)
         video_freq = (self.cfg.video_frequency > 0 and self.step_count % self.cfg.video_frequency == 0)
         render_freq = (self.cfg.render_frequency > 0 and self.step_count % self.cfg.render_frequency == 0)
+        live_preview_stride = max(1, int(self.cfg.live_preview_stride))
+        preview_freq = (self.cfg.live_preview_enabled and self.step_count % live_preview_stride == 0)
 
         self.scene.write_data_to_sim()
         for _ in range(self.cfg.decimation):
             self.sim.step(render=False)
 
         if render_freq or (self.mode == 'collect' and is_save and save_freq) or (is_save and video_freq) \
-            or (self.mode == 'eval' and not self.in_pre_move):
+            or (self.mode == 'eval' and not self.in_pre_move) or preview_freq:
             self._update_render()
 
         obs = None
+        if preview_freq and not (is_save and video_freq):
+            obs = self._get_observations()
+            self.video_handler.write_preview(self.get_frame_shot(obs))
+
         if self.mode == 'collect' and is_save and save_freq:
             obs = self._get_observations()
             self.save_observations(obs)
