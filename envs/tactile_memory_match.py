@@ -67,6 +67,9 @@ class Task(BaseTask):
     placement_overlap_margin = 0.004
     timeline_frequency = 5
     probe_delay_steps = 18
+    weight_probe_lift_height = 0.018
+    weight_probe_hold_steps = 10
+    weight_probe_return_steps = 6
     post_release_wait_steps = 35
     occlusion_enabled = False
     occlusion_opacity = 1.0
@@ -201,6 +204,11 @@ class Task(BaseTask):
             "candidate_left": {},
             "candidate_right": {},
         }
+        self.tactile_weight_signatures = {
+            "reference": {},
+            "candidate_left": {},
+            "candidate_right": {},
+        }
         self.metadata.update(
             {
                 "reference_class": str(self.reference_class["label"]),
@@ -233,6 +241,9 @@ class Task(BaseTask):
                 "tactile_signature_reference": {},
                 "tactile_signature_candidate_left": {},
                 "tactile_signature_candidate_right": {},
+                "tactile_weight_signature_reference": {},
+                "tactile_weight_signature_candidate_left": {},
+                "tactile_weight_signature_candidate_right": {},
                 "occlusion_enabled": bool(self.occlusion_enabled),
                 "occlusion_opacity": float(self.occlusion_opacity),
                 "occlusion_wall_base_z": float(self.occlusion_wall_base_z),
@@ -244,7 +255,10 @@ class Task(BaseTask):
                 "expert_policy": "probe_reference_probe_candidates_select_by_tactile_similarity",
                 "selection_method": None,
                 "tactile_similarity_scores": {},
+                "tactile_static_similarity_scores": {},
+                "tactile_weight_similarity_scores": {},
                 "tactile_similarity_margin": None,
+                "tactile_weight_similarity_margin": None,
                 "failure_stage": None,
             }
         )
@@ -354,17 +368,13 @@ class Task(BaseTask):
         self.reference_touched = self._has_tactile_contact()
         signature = self._capture_tactile_signature("reference")
         self.reference_tactile_signature_valid = bool(signature.get("contact", False))
-
-        start_z = float(self.reference_object.get_pose().p[2])
-        self.task_phase = "reference_lift"
-        self.move(
-            self.atom.move_by_displacement(z=0.018),
-            tag="reference_probe_lift",
-            time_dilation_factor=0.5,
-            is_save=True,
+        weight_signature = self._probe_weight_response(
+            "reference",
+            self.reference_object,
+            signature,
+            phase="reference_lift",
         )
-        self.delay(8, is_save=True)
-        self.reference_lifted = bool(float(self.reference_object.get_pose().p[2]) - start_z > 0.010)
+        self.reference_lifted = bool(weight_signature.get("object_lift_delta", 0.0) > 0.010)
         self.move(self.atom.open_gripper(1.0), tag="reference_release_open", is_save=True)
         self.delay(10, is_save=True)
         self._sync_metadata()
@@ -382,7 +392,13 @@ class Task(BaseTask):
             return False
         self.delay(self.probe_delay_steps, is_save=True)
         self.candidate_touched[public_name] = self._has_tactile_contact()
-        self._capture_tactile_signature(public_name)
+        signature = self._capture_tactile_signature(public_name)
+        self._probe_weight_response(
+            public_name,
+            actor,
+            signature,
+            phase=f"{public_name}_weight_probe",
+        )
         self.move(self.atom.open_gripper(1.0), tag=f"{public_name}_probe_open", is_save=True)
         self.delay(10, is_save=True)
         self._sync_metadata()
@@ -390,28 +406,172 @@ class Task(BaseTask):
 
     def _select_candidate_by_tactile_similarity(self) -> str:
         reference = self.tactile_signatures.get("reference", {})
-        scores = {
+        reference_weight = self.tactile_weight_signatures.get("reference", {})
+        static_scores = {
             public_name: self._tactile_signature_distance(
                 reference,
                 self.tactile_signatures.get(public_name, {}),
             )
             for public_name in ("candidate_left", "candidate_right")
         }
+        weight_scores = {
+            public_name: self._weight_signature_distance(
+                reference_weight,
+                self.tactile_weight_signatures.get(public_name, {}),
+            )
+            for public_name in ("candidate_left", "candidate_right")
+        }
+        scores = {}
+        for public_name in ("candidate_left", "candidate_right"):
+            weight_score = weight_scores[public_name]
+            scores[public_name] = static_scores[public_name]
+            if np.isfinite(weight_score):
+                scores[public_name] += weight_score
+
         selected = min(scores, key=scores.get)
         other = "candidate_right" if selected == "candidate_left" else "candidate_left"
-        self.metadata["selection_method"] = "tactile_signature_similarity"
+        self.metadata["selection_method"] = "tactile_static_weight_similarity"
         self.metadata["tactile_similarity_scores"] = {
             name: float(score) for name, score in scores.items()
         }
+        self.metadata["tactile_static_similarity_scores"] = {
+            name: float(score) for name, score in static_scores.items()
+        }
+        self.metadata["tactile_weight_similarity_scores"] = {
+            name: float(score) for name, score in weight_scores.items()
+        }
         self.metadata["tactile_similarity_margin"] = float(scores[other] - scores[selected])
+        self.metadata["tactile_weight_similarity_margin"] = float(
+            weight_scores[other] - weight_scores[selected]
+            if np.isfinite(weight_scores[other]) and np.isfinite(weight_scores[selected])
+            else 0.0
+        )
         print(
-            "[tactile-memory-match] selection_method=tactile_signature_similarity "
+            "[tactile-memory-match] selection_method=tactile_static_weight_similarity "
             f"selected={selected} "
             f"candidate_left={scores['candidate_left']:.4f} "
             f"candidate_right={scores['candidate_right']:.4f} "
+            f"static_left={static_scores['candidate_left']:.4f} "
+            f"static_right={static_scores['candidate_right']:.4f} "
+            f"weight_left={weight_scores['candidate_left']:.4f} "
+            f"weight_right={weight_scores['candidate_right']:.4f} "
             f"margin={self.metadata['tactile_similarity_margin']:.4f}"
         )
         return selected
+
+    def _probe_weight_response(self, key: str, actor: Actor, before_signature: dict, phase: str) -> dict:
+        previous_phase = self.task_phase
+        self.task_phase = phase
+        start_actor_z = float(actor.get_pose().p[2])
+        start_gripper_z = float(self._robot_manager.get_gripper_center_pose().p[2])
+        commanded_lift = float(self.weight_probe_lift_height)
+
+        ok = self._role_move(
+            key,
+            self.atom.move_by_displacement(z=commanded_lift, xyz_coord="world"),
+            tag=f"{key}_weight_lift",
+            time_dilation_factor=0.5,
+            is_save=True,
+        )
+        self.delay(self.weight_probe_hold_steps, is_save=True)
+
+        after_signature = self._read_tactile_signature()
+        end_actor_z = float(actor.get_pose().p[2])
+        end_gripper_z = float(self._robot_manager.get_gripper_center_pose().p[2])
+        object_lift_delta = float(end_actor_z - start_actor_z)
+        gripper_lift_delta = float(end_gripper_z - start_gripper_z)
+        lift_follow_ratio = float(object_lift_delta / max(abs(gripper_lift_delta), 1e-6))
+        depth_delta_drop = float(
+            before_signature.get("mean_depth_delta_mm", 0.0)
+            - after_signature.get("mean_depth_delta_mm", 0.0)
+        )
+        contact_area_drop = float(
+            before_signature.get("mean_contact_area", 0.0)
+            - after_signature.get("mean_contact_area", 0.0)
+        )
+        contact_lost = bool(before_signature.get("contact", False) and not after_signature.get("contact", False))
+        response = {
+            "valid": bool(ok),
+            "commanded_lift": commanded_lift,
+            "object_lift_delta": object_lift_delta,
+            "gripper_lift_delta": gripper_lift_delta,
+            "lift_follow_ratio": lift_follow_ratio,
+            "inhand_z_error": float(abs(end_gripper_z - end_actor_z)),
+            "before_depth_delta_mm": float(before_signature.get("mean_depth_delta_mm", 0.0)),
+            "after_depth_delta_mm": float(after_signature.get("mean_depth_delta_mm", 0.0)),
+            "depth_delta_drop": depth_delta_drop,
+            "before_contact_area": float(before_signature.get("mean_contact_area", 0.0)),
+            "after_contact_area": float(after_signature.get("mean_contact_area", 0.0)),
+            "contact_area_drop": contact_area_drop,
+            "contact_lost": contact_lost,
+            "after_contact": bool(after_signature.get("contact", False)),
+            "after_both_contact": bool(after_signature.get("both_contact", False)),
+            "gripper_qpos_after": float(self._robot_manager.get_gripper_qpos()),
+            "step": int(self.step_count),
+            "phase": str(phase),
+        }
+        self._store_weight_signature(key, response)
+
+        if ok:
+            self._role_move(
+                key,
+                self.atom.move_by_displacement(z=-commanded_lift, xyz_coord="world"),
+                tag=f"{key}_weight_lower",
+                time_dilation_factor=0.5,
+                is_save=True,
+            )
+            self.delay(self.weight_probe_return_steps, is_save=True)
+        self.task_phase = previous_phase
+        self._sync_metadata()
+        return response
+
+    def _store_weight_signature(self, key: str, signature: dict):
+        if key in self.tactile_weight_signatures:
+            self.tactile_weight_signatures[key] = signature
+        if key == "reference":
+            self.metadata["tactile_weight_signature_reference"] = signature
+        elif key in {"candidate_left", "candidate_right"}:
+            self.metadata[f"tactile_weight_signature_{key}"] = signature
+
+    @classmethod
+    def _weight_signature_distance(cls, reference: dict, candidate: dict) -> float:
+        if not reference.get("valid", False) or not candidate.get("valid", False):
+            return float("inf")
+        features = [
+            ("object_lift_delta", 0.025, 1.0),
+            ("gripper_lift_delta", 0.025, 0.5),
+            ("lift_follow_ratio", 1.0, 1.0),
+            ("depth_delta_drop", 6.0, 0.75),
+            ("contact_area_drop", 0.50, 0.75),
+            ("after_depth_delta_mm", 6.0, 0.75),
+            ("after_contact_area", 0.50, 0.75),
+            ("inhand_z_error", 0.20, 0.5),
+            ("gripper_qpos_after", 0.02, 0.5),
+        ]
+        penalty = 0.0
+        if bool(reference.get("contact_lost", False)) != bool(candidate.get("contact_lost", False)):
+            penalty += 1.0
+        if bool(reference.get("after_both_contact", False)) != bool(candidate.get("after_both_contact", False)):
+            penalty += 0.5
+
+        weighted_sum = 0.0
+        weight_sum = 0.0
+        for key, scale, weight in features:
+            ref_value = reference.get(key)
+            cand_value = candidate.get(key)
+            if ref_value is None or cand_value is None:
+                continue
+            ref_value = float(ref_value)
+            cand_value = float(cand_value)
+            if not np.isfinite(ref_value) or not np.isfinite(cand_value):
+                continue
+            normalized = (cand_value - ref_value) / max(float(scale), 1e-6)
+            weighted_sum += float(weight) * normalized * normalized
+            weight_sum += float(weight)
+
+        if weight_sum <= 0.0:
+            return float("inf")
+        return float(np.sqrt(weighted_sum / weight_sum) + penalty)
 
     @classmethod
     def _tactile_signature_distance(cls, reference: dict, candidate: dict) -> float:
@@ -802,7 +962,7 @@ class Task(BaseTask):
             "search_z_range": [0.018, float(self.safe_gripper_z)],
         }
 
-    def _capture_tactile_signature(self, key: str) -> dict:
+    def _read_tactile_signature(self) -> dict:
         try:
             tactile_obs = self._tactile_manager.get_observations(["depth", "marker"])
         except Exception:
@@ -820,6 +980,10 @@ class Task(BaseTask):
             "step": int(self.step_count),
             "phase": str(self.task_phase),
         }
+        return signature
+
+    def _capture_tactile_signature(self, key: str) -> dict:
+        signature = self._read_tactile_signature()
         if key in self.tactile_signatures:
             self.tactile_signatures[key] = signature
         if key == "reference":
