@@ -68,7 +68,7 @@ class Task(BaseTask):
     timeline_frequency = 5
     probe_delay_steps = 18
     post_release_wait_steps = 35
-    occlusion_enabled = True
+    occlusion_enabled = False
     occlusion_opacity = 1.0
     occlusion_center_xy = np.array([0.60, -0.26], dtype=np.float64)
     occlusion_inner_width = 0.42
@@ -240,8 +240,11 @@ class Task(BaseTask):
                 "occlusion_inner_width": float(self.occlusion_inner_width),
                 "occlusion_inner_depth": float(self.occlusion_inner_depth),
                 "wrist_view_darkened": bool(self.occlusion_enabled),
-                "expert": "private_label_tactile_match",
-                "expert_policy": "probe_reference_probe_candidates_place_match",
+                "expert": "tactile_similarity_match",
+                "expert_policy": "probe_reference_probe_candidates_select_by_tactile_similarity",
+                "selection_method": None,
+                "tactile_similarity_scores": {},
+                "tactile_similarity_margin": None,
                 "failure_stage": None,
             }
         )
@@ -337,7 +340,8 @@ class Task(BaseTask):
         self._probe_candidate("candidate_right")
         if not self.plan_success:
             return
-        self._select_and_place_candidate(self.match_candidate_public_name)
+        selected = self._select_candidate_by_tactile_similarity()
+        self._select_and_place_candidate(selected)
         self.delay(20, is_save=False)
 
     def _probe_reference(self) -> bool:
@@ -383,6 +387,82 @@ class Task(BaseTask):
         self.delay(10, is_save=True)
         self._sync_metadata()
         return True
+
+    def _select_candidate_by_tactile_similarity(self) -> str:
+        reference = self.tactile_signatures.get("reference", {})
+        scores = {
+            public_name: self._tactile_signature_distance(
+                reference,
+                self.tactile_signatures.get(public_name, {}),
+            )
+            for public_name in ("candidate_left", "candidate_right")
+        }
+        selected = min(scores, key=scores.get)
+        other = "candidate_right" if selected == "candidate_left" else "candidate_left"
+        self.metadata["selection_method"] = "tactile_signature_similarity"
+        self.metadata["tactile_similarity_scores"] = {
+            name: float(score) for name, score in scores.items()
+        }
+        self.metadata["tactile_similarity_margin"] = float(scores[other] - scores[selected])
+        print(
+            "[tactile-memory-match] selection_method=tactile_signature_similarity "
+            f"selected={selected} "
+            f"candidate_left={scores['candidate_left']:.4f} "
+            f"candidate_right={scores['candidate_right']:.4f} "
+            f"margin={self.metadata['tactile_similarity_margin']:.4f}"
+        )
+        return selected
+
+    @classmethod
+    def _tactile_signature_distance(cls, reference: dict, candidate: dict) -> float:
+        features = [
+            (("mean_depth_delta_mm",), 6.0, 1.0),
+            (("mean_contact_area",), 0.50, 1.0),
+            (("gripper_qpos",), 0.02, 0.5),
+            (("left", "depth_delta_mm"), 6.0, 0.75),
+            (("right", "depth_delta_mm"), 6.0, 0.75),
+            (("left", "contact_area"), 0.50, 0.75),
+            (("right", "contact_area"), 0.50, 0.75),
+            (("left", "marker_centroid_x"), 320.0, 0.15),
+            (("right", "marker_centroid_x"), 320.0, 0.15),
+            (("left", "marker_centroid_y"), 240.0, 0.15),
+            (("right", "marker_centroid_y"), 240.0, 0.15),
+        ]
+
+        def get_nested(data: dict, path: tuple[str, ...]):
+            value = data
+            for key in path:
+                if not isinstance(value, dict) or key not in value:
+                    return None
+                value = value[key]
+            return value
+
+        penalty = 0.0
+        if not reference.get("contact", False):
+            penalty += 10.0
+        if not candidate.get("contact", False):
+            penalty += 10.0
+        if bool(reference.get("both_contact", False)) != bool(candidate.get("both_contact", False)):
+            penalty += 1.0
+
+        weighted_sum = 0.0
+        weight_sum = 0.0
+        for path, scale, weight in features:
+            ref_value = get_nested(reference, path)
+            cand_value = get_nested(candidate, path)
+            if ref_value is None or cand_value is None:
+                continue
+            ref_value = float(ref_value)
+            cand_value = float(cand_value)
+            if not np.isfinite(ref_value) or not np.isfinite(cand_value):
+                continue
+            normalized = (cand_value - ref_value) / max(float(scale), 1e-6)
+            weighted_sum += float(weight) * normalized * normalized
+            weight_sum += float(weight)
+
+        if weight_sum <= 0.0:
+            return float("inf")
+        return float(np.sqrt(weighted_sum / weight_sum) + penalty)
 
     def _select_and_place_candidate(self, public_name: str) -> bool:
         self.selected_candidate = public_name
@@ -575,7 +655,12 @@ class Task(BaseTask):
             on_pad = self._object_footprint_overlaps_pad(actor_pose, self.match_slot_pose, self._variant_for_public_candidate(public_name))
         else:
             on_pad = xy_error < 0.035
-        return bool(on_pad and supported and gripper_open)
+        self.metadata[f"{public_name}_xy_error"] = xy_error
+        self.metadata[f"{public_name}_z_error"] = z_error
+        self.metadata[f"{public_name}_placement_supported"] = supported
+        self.metadata[f"{public_name}_placement_gripper_open"] = gripper_open
+        self.metadata[f"{public_name}_on_match_pad"] = bool(on_pad)
+        return bool(on_pad)
 
     def _object_footprint_overlaps_pad(self, actor_pose: Pose, target_pose: Pose, variant: dict) -> bool:
         center_xy = np.asarray(actor_pose.p[:2], dtype=np.float64)
