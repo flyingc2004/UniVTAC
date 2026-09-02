@@ -71,7 +71,7 @@ class Task(BaseTask):
     weight_probe_hold_steps = 10
     weight_probe_return_steps = 6
     post_release_wait_steps = 35
-    occlusion_enabled = False
+    occlusion_enabled = True
     occlusion_opacity = 1.0
     occlusion_center_xy = np.array([0.60, -0.26], dtype=np.float64)
     occlusion_inner_width = 0.42
