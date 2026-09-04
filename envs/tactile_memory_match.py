@@ -52,8 +52,10 @@ class Task(BaseTask):
     match_slot_xy = np.array([0.42, 0.00], dtype=np.float64)
     stash_xy = np.array([-2.0, -2.0], dtype=np.float64)
     can_rot = [1.0, 0.0, 0.0, 0.0]
-    xy_jitter = 0.006
-    candidate_jitter = 0.004
+    # Phase-one identity matching fixes scene geometry across seeds. The hidden
+    # tactile class and the left/right match assignment remain randomized.
+    xy_jitter = 0.0
+    candidate_jitter = 0.0
     safe_gripper_z = 0.160
     release_retreat_z = 0.130
     release_z_clearance = 0.018
@@ -71,7 +73,7 @@ class Task(BaseTask):
     weight_probe_hold_steps = 10
     weight_probe_return_steps = 6
     post_release_wait_steps = 35
-    occlusion_enabled = True
+    occlusion_enabled = False
     occlusion_opacity = 1.0
     occlusion_center_xy = np.array([0.60, -0.26], dtype=np.float64)
     occlusion_inner_width = 0.42
@@ -183,6 +185,7 @@ class Task(BaseTask):
         self.task_phase = "reset"
         self.active_public_name = None
         self.selected_candidate = None
+        self.physical_selected_candidate = None
         self.selection_correct = False
         self.reference_touched = False
         self.reference_lifted = False
@@ -228,6 +231,7 @@ class Task(BaseTask):
                 "candidate_right_start_pose": self.candidate_start_poses["candidate_right"].tolist(),
                 "match_slot_pose": self.match_slot_pose.tolist(),
                 "selected_candidate": None,
+                "physical_selected_candidate": None,
                 "selection_correct": False,
                 "candidate_left_touched": False,
                 "candidate_right_touched": False,
@@ -796,12 +800,24 @@ class Task(BaseTask):
                 self.candidate_place_stable_count[public_name] += 1
             else:
                 self.candidate_place_stable_count[public_name] = 0
-            if self.candidate_place_stable_count[public_name] >= self.placement_stable_steps_required:
-                self.candidate_placed[public_name] = True
+            self.candidate_placed[public_name] = bool(
+                self.candidate_place_stable_count[public_name] >= self.placement_stable_steps_required
+            )
 
         self.match_candidate_placed = bool(self.candidate_placed[self.match_candidate_public_name])
         self.distractor_placed = bool(self.candidate_placed[self.distractor_candidate_public_name])
-        self.selection_correct = bool(self.selected_candidate == self.match_candidate_public_name)
+        placed_candidates = [
+            public_name
+            for public_name in ("candidate_left", "candidate_right")
+            if self.candidate_placed[public_name]
+        ]
+        self.physical_selected_candidate = placed_candidates[0] if len(placed_candidates) == 1 else None
+        if self.selected_candidate is None and self.physical_selected_candidate is not None:
+            self.selected_candidate = self.physical_selected_candidate
+            self.metadata["selection_method"] = "physical_placement"
+        elif len(placed_candidates) > 1:
+            self.metadata["selection_method"] = "ambiguous_physical_placement"
+        self.selection_correct = bool(self.match_candidate_placed and not self.distractor_placed)
         self._sync_metadata()
 
     def _is_candidate_placed(self, public_name: str) -> bool:
@@ -820,7 +836,10 @@ class Task(BaseTask):
         self.metadata[f"{public_name}_placement_supported"] = supported
         self.metadata[f"{public_name}_placement_gripper_open"] = gripper_open
         self.metadata[f"{public_name}_on_match_pad"] = bool(on_pad)
-        return bool(on_pad)
+        # A projected footprint can overlap the pad while the robot is still
+        # holding the cylinder above it. Count placement only after the object
+        # is supported at the pad height and the gripper has released it.
+        return bool(on_pad and supported and gripper_open)
 
     def _object_footprint_overlaps_pad(self, actor_pose: Pose, target_pose: Pose, variant: dict) -> bool:
         center_xy = np.asarray(actor_pose.p[:2], dtype=np.float64)
@@ -1080,6 +1099,7 @@ class Task(BaseTask):
         self.metadata.update(
             {
                 "selected_candidate": self.selected_candidate,
+                "physical_selected_candidate": self.physical_selected_candidate,
                 "selection_correct": bool(self.selection_correct),
                 "candidate_left_touched": bool(self.candidate_touched["candidate_left"]),
                 "candidate_right_touched": bool(self.candidate_touched["candidate_right"]),
