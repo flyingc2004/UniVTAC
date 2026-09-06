@@ -2,8 +2,9 @@ import json
 import argparse
 import os
 
-VCPKG_BASE_LINE = 'b2cb0da531c2f1f740045bfe7c4dac59f0b2b69c'
-VCPKG_TAG = '2024.11.16' 
+# cpptrace >= 0.8.3 first appears in this vcpkg baseline.
+VCPKG_BASE_LINE = 'ce613c41372b23b1f51333815feb3edd87ef8a8b'
+VCPKG_TAG = '2025.04.09'
 
 base_vcpkg_json = {
     'name': 'libuipc',
@@ -168,5 +169,3 @@ if __name__ == '__main__':
           'If you want to skip, please define `-DUIPC_DEV_MODE=ON` when configuring CMake.')
     print_deps()
     exit(1)
-    
-    
