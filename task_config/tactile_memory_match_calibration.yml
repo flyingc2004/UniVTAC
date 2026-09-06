@@ -1,0 +1,27 @@
+# Offline raw-tactile calibration collection. This preserves only the fields
+# consumed by tools/analyze_tactile_memory_match.py; no camera RGB is saved.
+save_dir: ./data
+
+decimation: 1
+save_frequency: 4
+video_frequency: 0
+render_frequency: 0
+preserve_raw_cache: true
+headless: true
+livestream: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 80
+start_seed: 0
+max_seed: -1
+
+sensor_type: gsmini
+reset_time_limit: 900
+step_lim: 500
+max_save_frames: 5000
+live_preview_enabled: false
+
+observations:
+  tactile: ['marker', 'depth']

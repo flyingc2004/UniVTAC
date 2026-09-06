@@ -89,6 +89,7 @@ class BaseTaskCfg(DirectRLEnvCfg):
 
     save_frequency = 1
     video_frequency = 1
+    preserve_raw_cache: bool = False
     render_frequency = 0
     video_size = (960, 320)
     live_preview_enabled: bool = False
@@ -551,7 +552,7 @@ class BaseTask(UipcRLEnv):
         self.step_count += 1
 
         is_save = is_save and (not self.in_pre_move) and (not self.mode == 'eval_test')
-        save_freq = (self.cfg.video_frequency > 0 and self.step_count % self.cfg.save_frequency == 0)
+        save_freq = (self.cfg.save_frequency > 0 and self.step_count % self.cfg.save_frequency == 0)
         video_freq = (self.cfg.video_frequency > 0 and self.step_count % self.cfg.video_frequency == 0)
         render_freq = (self.cfg.render_frequency > 0 and self.step_count % self.cfg.render_frequency == 0)
         live_preview_stride = max(1, int(self.cfg.live_preview_stride))
@@ -650,7 +651,7 @@ class BaseTask(UipcRLEnv):
     
     def clean_cache(self, mean_steps:float=0.0, result:str=None):
         self.mean_steps = mean_steps
-        if self.tmp_save_dir.exists():
+        if self.tmp_save_dir.exists() and not self.cfg.preserve_raw_cache:
             for f in self.tmp_save_dir.iterdir():
                 f.unlink()
             self.tmp_save_dir.rmdir()
