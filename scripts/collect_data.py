@@ -113,16 +113,26 @@ def log(msg):
 
 def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed):
     suc_num, seed = 0, 0
-    suc_map = []
+    suc_map_path = task.save_root / 'suc_map.txt'
+    if suc_map_path.exists():
+        with open(suc_map_path, 'r') as f:
+            suc_map = [entry for entry in f.read().strip().split(' ') if entry]
+    else:
+        suc_map = []
+
+    def record_seed_result(seed_value: int, result: str):
+        """Keep a resumable seed-indexed map when collection is split."""
+        if seed_value >= len(suc_map):
+            suc_map.extend(['?'] * (seed_value - len(suc_map)))
+            suc_map.append(result)
+        else:
+            suc_map[seed_value] = result
     
     if start_seed != -1:
         seed = start_seed
         log(f"Starting from seed {seed}.")
     elif use_seed:
-        suc_map_path = task.save_root / 'suc_map.txt'
         if suc_map_path.exists():
-            with open(suc_map_path, 'r') as f:
-                suc_map = f.read().strip().split(' ')
             suc_num = sum([1 for s in suc_map if s == '1'])
             seed = len(suc_map)
             log(f"Use seed with {suc_num} successful episodes. Starting from seed {seed}.")
@@ -136,7 +146,7 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed):
             cost_t = time.perf_counter() - start_t
         except Exception as e:
             log(f"[{suc_num:<3d}] Seed {seed} failed with error: {traceback.format_exc()}")
-            suc_map.append('0')
+            record_seed_result(seed, '0')
             task.clean_cache(mean_steps=mean_steps, result='error')
         else:
             if task.plan_success and task.check_success() and not task.check_early_stop():
@@ -144,7 +154,7 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed):
                 log(f"[{suc_num:<3d}] Seed {seed} success in {cost_t:.2f} s.\n"
                     f"steps: {task.step_count:<5d}, save frames: {task.save_count:<5d}.\n")
                 suc_num += 1
-                suc_map.append('1')
+                record_seed_result(seed, '1')
                 if mean_steps > 0: 
                     mean_steps = ((suc_num - 1) * mean_steps + task.step_count) / suc_num
                 else:
@@ -153,10 +163,10 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed):
             else:
                 log(f"[{suc_num:<3d}] Seed {seed} failed in {cost_t:.2f} s.\n"
                     f"Plan {task.plan_success}, Check {task.check_success()}")
-                suc_map.append('0')
+                record_seed_result(seed, '0')
                 task.clean_cache(mean_steps=mean_steps, result='fail')
         
-        with open(task.save_root / 'suc_map.txt', 'w') as f:
+        with open(suc_map_path, 'w') as f:
             f.write(' '.join([s for s in suc_map]))
         
         seed += 1
