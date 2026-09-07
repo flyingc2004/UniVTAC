@@ -15,7 +15,7 @@ random_texture: false
 use_seed: true
 episode_num: 80
 start_seed: 0
-max_seed: -1
+max_seed: 79
 
 sensor_type: gsmini
 reset_time_limit: 900

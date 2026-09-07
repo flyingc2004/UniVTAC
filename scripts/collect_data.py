@@ -193,6 +193,9 @@ def main():
     env_cfg.decimation = task_config.get("decimation", env_cfg.decimation)
     env_cfg.save_frequency = task_config.get("save_frequency", env_cfg.save_frequency)
     env_cfg.video_frequency = task_config.get("video_frequency", env_cfg.video_frequency)
+    env_cfg.preserve_raw_cache = get_bool_config(
+        task_config, "preserve_raw_cache", env_cfg.preserve_raw_cache
+    )
     env_cfg.render_frequency = task_config.get("render_frequency", env_cfg.render_frequency)
     env_cfg.obs_data_type = task_config.get("observations", {})
     env_cfg.random_texture = task_config.get("random_texture", False)

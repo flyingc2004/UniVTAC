@@ -825,7 +825,14 @@ class Task(BaseTask):
         actor_pose = actor.get_pose()
         xy_error = float(np.linalg.norm(actor_pose.p[:2] - self.match_slot_pose.p[:2]))
         z_error = float(abs(actor_pose.p[2] - self.match_slot_pose.p[2]))
-        supported = bool(z_error < self.placement_supported_z_threshold)
+        # The cylinder center rests above the pad center.  After release, it
+        # only needs to settle below the commanded release height.
+        support_z_ceiling = float(
+            self.match_slot_pose.p[2]
+            + self.release_z_clearance
+            + self.placement_supported_z_threshold
+        )
+        supported = bool(float(actor_pose.p[2]) <= support_z_ceiling)
         gripper_open = bool(self._robot_manager.get_gripper_qpos() > 0.020)
         if str(self.placement_mode) == "pad_overlap":
             on_pad = self._object_footprint_overlaps_pad(actor_pose, self.match_slot_pose, self._variant_for_public_candidate(public_name))
@@ -833,6 +840,7 @@ class Task(BaseTask):
             on_pad = xy_error < 0.035
         self.metadata[f"{public_name}_xy_error"] = xy_error
         self.metadata[f"{public_name}_z_error"] = z_error
+        self.metadata[f"{public_name}_placement_support_z_ceiling"] = support_z_ceiling
         self.metadata[f"{public_name}_placement_supported"] = supported
         self.metadata[f"{public_name}_placement_gripper_open"] = gripper_open
         self.metadata[f"{public_name}_on_match_pad"] = bool(on_pad)
