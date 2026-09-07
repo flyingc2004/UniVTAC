@@ -77,6 +77,9 @@ class CMakeBuild(build_ext):
             "-DUIPC_DEV_MODE=1",
             "-DUIPC_BUILD_GUI=0",
         ]
+        overlay_ports = os.path.join(EXTENSION_PATH, "vcpkg-overlays")
+        if os.path.isdir(overlay_ports):
+            cmake_args += ["-DVCPKG_OVERLAY_PORTS=" + overlay_ports]
         if self.DCMAKE_CUDA_ARCHITECTURES is not None:  # None means "use native cuda architecture"
             cmake_args += ["-DCMAKE_CUDA_ARCHITECTURES=" + self.DCMAKE_CUDA_ARCHITECTURES]
 
