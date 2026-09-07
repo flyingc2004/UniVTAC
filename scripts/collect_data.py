@@ -193,6 +193,16 @@ def main():
     env_cfg.decimation = task_config.get("decimation", env_cfg.decimation)
     env_cfg.save_frequency = task_config.get("save_frequency", env_cfg.save_frequency)
     env_cfg.video_frequency = task_config.get("video_frequency", env_cfg.video_frequency)
+    # A tactile-only collection config has no head/wrist RGB frames for the
+    # composite video renderer. Never let an inherited video default abort raw
+    # tactile collection with a KeyError while saving a frame.
+    camera_observations = task_config.get("observations", {}).get("camera", [])
+    if env_cfg.video_frequency > 0 and not camera_observations:
+        print(
+            "[collect-data] disabling video: observations.camera is empty; "
+            "raw tactile collection will continue without RGB video."
+        )
+        env_cfg.video_frequency = 0
     env_cfg.preserve_raw_cache = get_bool_config(
         task_config, "preserve_raw_cache", env_cfg.preserve_raw_cache
     )
