@@ -29,7 +29,7 @@ def _marker(offset_x: float, offset_y: float) -> np.ndarray:
 
 
 def _frame(step: int, tag: str, indentation: float, marker_x: float, marker_y: float):
-    baseline = np.full((8, 8), 10.0, dtype=np.float64)
+    baseline = np.full((8, 8), 34.0, dtype=np.float64)
     depth = baseline - indentation
     return raw_distance.RawFrame(
         step=step,
@@ -58,8 +58,40 @@ class RawDistanceDescriptorTests(unittest.TestCase):
         self.assertEqual(vectors["static_only"].shape, (96,))
         self.assertEqual(vectors["dynamic_only"].shape, (60,))
         self.assertEqual(vectors["combined"].shape, (156,))
+        self.assertEqual(vectors["semantic_signature_8d"].shape, (8,))
         self.assertEqual(len(descriptor.close_steps), raw_distance.STATIC_FRAME_COUNT)
         self.assertEqual(len(descriptor.dynamic_steps), raw_distance.DYNAMIC_FRAME_COUNT)
+        self.assertEqual(len(descriptor.semantic_static_steps), raw_distance.STATIC_FRAME_COUNT)
+        self.assertEqual(len(descriptor.semantic_dynamic_steps), raw_distance.DYNAMIC_FRAME_COUNT)
+        # Dynamic semantic evidence ends before the lower motion begins.
+        self.assertLess(max(descriptor.semantic_dynamic_steps), 16)
+
+    def test_semantic_signature_keeps_raw_marker_pixels_and_coherence(self):
+        descriptor = raw_distance.extract_probe_descriptor(
+            "reference", _probe_frames("reference", 0, 3.0, 2.0)
+        )
+        signature = descriptor.vectors()["semantic_signature_8d"]
+
+        self.assertEqual(signature[0], 3.0)
+        self.assertAlmostEqual(signature[1], 2.9)
+        self.assertEqual(signature[2], 2.0)
+        self.assertEqual(signature[3], 2.0)
+        self.assertEqual(signature[6], 1.0)
+        self.assertEqual(signature[7], 1.0)
+        self.assertGreater(signature[4], 0.0)
+        self.assertGreater(signature[5], 0.0)
+
+    def test_semantic_signature_rejects_shallow_bilateral_contact(self):
+        with self.assertRaisesRegex(ValueError, "static left shallow_contact"):
+            raw_distance.extract_probe_descriptor(
+                "reference", _probe_frames("reference", 0, 0.0, 1.0)
+            )
+
+    def test_marker_coherence_is_low_for_symmetric_flow(self):
+        marker = _marker(0.0, 0.0)
+        marker[1, :32, 0] = marker[0, :32, 0] - 2.0
+        marker[1, 32:, 0] = marker[0, 32:, 0] + 2.0
+        self.assertAlmostEqual(raw_distance._marker_coherence(marker), 0.0)
 
     def test_same_probe_is_nearer_than_changed_probe(self):
         reference = raw_distance.extract_probe_descriptor("reference", _probe_frames("reference", 0, 3.0, 1.0))
@@ -126,7 +158,9 @@ class RawDistanceDescriptorTests(unittest.TestCase):
             )
             self.assertEqual(summary["quality"]["valid_episodes"], 8)
             self.assertEqual(summary["metrics"]["combined"]["overall_accuracy"], 1.0)
+            self.assertEqual(summary["metrics"]["semantic_signature_8d"]["overall_accuracy"], 1.0)
             self.assertTrue((root / "analysis" / "predictions.csv").is_file())
+            self.assertTrue((root / "analysis" / "semantic_8d_features.csv").is_file())
             self.assertTrue((root / "analysis" / "figures" / "class_confusion_matrix.png").is_file())
 
 

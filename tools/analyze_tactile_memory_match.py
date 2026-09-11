@@ -30,7 +30,9 @@ KNOWN_CLASSES = ("light-smooth", "light-rough", "heavy-smooth", "heavy-rough")
 GRID_SIZE = 4
 STATIC_FRAME_COUNT = 8
 DYNAMIC_FRAME_COUNT = 6
-DESCRIPTOR_VERSION = "raw_tactile_distance.v1"
+SEMANTIC_DEPTH_FAR_PLANE_MM = 34.0
+SEMANTIC_CONTACT_MIN_DEPTH_MM = 0.5
+DESCRIPTOR_VERSION = "raw_tactile_distance.v2"
 
 
 @dataclass(frozen=True)
@@ -50,8 +52,11 @@ class ProbeDescriptor:
     static_depth: np.ndarray
     static_marker: np.ndarray
     dynamic: np.ndarray
+    semantic_signature: np.ndarray
     close_steps: tuple[int, ...]
     dynamic_steps: tuple[int, ...]
+    semantic_static_steps: tuple[int, ...]
+    semantic_dynamic_steps: tuple[int, ...]
 
     def vectors(self) -> dict[str, np.ndarray]:
         static = np.concatenate((self.static_depth, self.static_marker))
@@ -61,6 +66,7 @@ class ProbeDescriptor:
             "static_only": static,
             "dynamic_only": self.dynamic,
             "combined": np.concatenate((static, self.dynamic)),
+            "semantic_signature_8d": self.semantic_signature,
         }
 
     def dynamic_depth_contact(self) -> np.ndarray:
@@ -187,6 +193,26 @@ def _dynamic_frames(name: str, frames: list[RawFrame]) -> list[RawFrame]:
     return [frame for frame in frames if start_step <= frame.step <= end_step]
 
 
+def _semantic_dynamic_frames(name: str, frames: list[RawFrame]) -> list[RawFrame]:
+    """Return lift/hold frames, deliberately excluding the lowering motion."""
+    prefix = _weight_prefix(name)
+    lift_tag = f"{prefix}_lift"
+    lower_tag = f"{prefix}_lower"
+    lift_frames = [frame for frame in frames if frame.tag == lift_tag]
+    lower_frames = [frame for frame in frames if frame.tag == lower_tag]
+    if not lift_frames or not lower_frames:
+        raise ValueError(f"Missing {lift_tag} or {lower_tag}")
+    start_step = min(frame.step for frame in lift_frames)
+    lower_start = min(frame.step for frame in lower_frames)
+    dynamic = [frame for frame in frames if start_step <= frame.step < lower_start]
+    if len(dynamic) < DYNAMIC_FRAME_COUNT:
+        raise ValueError(
+            f"{name} lift/hold window has only {len(dynamic)} frames; "
+            f"requires {DYNAMIC_FRAME_COUNT}"
+        )
+    return dynamic
+
+
 def _static_frames(name: str, frames: list[RawFrame]) -> list[RawFrame]:
     close_frames = [frame for frame in frames if frame.tag == _close_tag(name)]
     if len(close_frames) < STATIC_FRAME_COUNT:
@@ -194,13 +220,51 @@ def _static_frames(name: str, frames: list[RawFrame]) -> list[RawFrame]:
     return close_frames
 
 
-def extract_probe_descriptor(name: str, frames: list[RawFrame]) -> ProbeDescriptor:
+def _indentation_depth_mm(depth: np.ndarray, far_plane_mm: float) -> float:
+    values = np.asarray(depth, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        raise ValueError("depth contains no finite values")
+    indentation = np.clip(float(far_plane_mm) - values, 0.0, None)
+    return float(np.percentile(indentation, 98.0))
+
+
+def _marker_displacement_px(marker: np.ndarray) -> float:
+    delta = _marker_delta(marker)
+    magnitude = np.linalg.norm(delta, axis=1)
+    magnitude = magnitude[np.isfinite(magnitude)]
+    if magnitude.size == 0:
+        raise ValueError("marker flow contains no finite displacement")
+    return float(magnitude.mean())
+
+
+def _marker_coherence(marker: np.ndarray) -> float:
+    delta = _marker_delta(marker)
+    valid = delta[np.isfinite(delta).all(axis=1)]
+    if valid.size == 0:
+        raise ValueError("marker flow contains no finite displacement")
+    denominator = float(np.linalg.norm(valid, axis=1).mean())
+    if denominator <= 1e-12:
+        return 0.0
+    return float(np.clip(np.linalg.norm(valid.mean(axis=0)) / denominator, 0.0, 1.0))
+
+
+def extract_probe_descriptor(
+    name: str,
+    frames: list[RawFrame],
+    *,
+    semantic_far_plane_mm: float = SEMANTIC_DEPTH_FAR_PLANE_MM,
+    semantic_contact_min_depth_mm: float = SEMANTIC_CONTACT_MIN_DEPTH_MM,
+) -> ProbeDescriptor:
     """Build a descriptor using only raw depth, marker flow, and atom tags."""
 
     close_frames = _static_frames(name, frames)
     baseline_frames = close_frames[:STATIC_FRAME_COUNT]
     final_frames = close_frames[-STATIC_FRAME_COUNT:]
     dynamic_frames = _select_uniform(_dynamic_frames(name, frames), DYNAMIC_FRAME_COUNT)
+    semantic_dynamic_frames = _select_uniform(
+        _semantic_dynamic_frames(name, frames), DYNAMIC_FRAME_COUNT
+    )
 
     depth_parts: list[np.ndarray] = []
     marker_parts: list[np.ndarray] = []
@@ -234,12 +298,72 @@ def extract_probe_descriptor(name: str, frames: list[RawFrame]) -> ProbeDescript
             )
         dynamic_parts.append(np.concatenate(frame_parts))
 
+    static_depths: list[float] = []
+    static_displacements: list[float] = []
+    dynamic_displacements: list[float] = []
+    static_coherences: list[float] = []
+    for hand in ("left", "right"):
+        static_depth = float(
+            np.median(
+                [
+                    _indentation_depth_mm(frame.depth[hand], semantic_far_plane_mm)
+                    for frame in final_frames
+                ]
+            )
+        )
+        dynamic_depth = float(
+            np.median(
+                [
+                    _indentation_depth_mm(frame.depth[hand], semantic_far_plane_mm)
+                    for frame in semantic_dynamic_frames
+                ]
+            )
+        )
+        if static_depth <= semantic_contact_min_depth_mm:
+            raise ValueError(f"{name} static {hand} shallow_contact")
+        if dynamic_depth <= semantic_contact_min_depth_mm:
+            raise ValueError(f"{name} dynamic {hand} shallow_contact")
+
+        static_marker = np.median(
+            np.stack([frame.marker[hand] for frame in final_frames]), axis=0
+        )
+        static_displacement = _marker_displacement_px(static_marker)
+        dynamic_displacement = float(
+            np.median(
+                [
+                    _marker_displacement_px(frame.marker[hand])
+                    for frame in semantic_dynamic_frames
+                ]
+            )
+        )
+        static_depths.append(static_depth)
+        static_displacements.append(static_displacement)
+        dynamic_displacements.append(dynamic_displacement)
+        static_coherences.append(_marker_coherence(static_marker))
+
+    semantic_signature = np.asarray(
+        [
+            static_depths[0],
+            static_depths[1],
+            static_displacements[0],
+            static_displacements[1],
+            dynamic_displacements[0] - static_displacements[0],
+            dynamic_displacements[1] - static_displacements[1],
+            static_coherences[0],
+            static_coherences[1],
+        ],
+        dtype=np.float64,
+    )
+
     return ProbeDescriptor(
         static_depth=np.concatenate(depth_parts),
         static_marker=np.concatenate(marker_parts),
         dynamic=np.concatenate(dynamic_parts),
+        semantic_signature=semantic_signature,
         close_steps=tuple(frame.step for frame in final_frames),
         dynamic_steps=tuple(frame.step for frame in dynamic_frames),
+        semantic_static_steps=tuple(frame.step for frame in final_frames),
+        semantic_dynamic_steps=tuple(frame.step for frame in semantic_dynamic_frames),
     )
 
 
@@ -347,6 +471,24 @@ def _evaluate_variant(
                     "dynamic_left_steps": ";".join(map(str, episode.descriptors["candidate_left"].dynamic_steps)),
                     "static_right_steps": ";".join(map(str, episode.descriptors["candidate_right"].close_steps)),
                     "dynamic_right_steps": ";".join(map(str, episode.descriptors["candidate_right"].dynamic_steps)),
+                    "semantic_static_reference_steps": ";".join(
+                        map(str, episode.descriptors["reference"].semantic_static_steps)
+                    ),
+                    "semantic_dynamic_reference_steps": ";".join(
+                        map(str, episode.descriptors["reference"].semantic_dynamic_steps)
+                    ),
+                    "semantic_static_left_steps": ";".join(
+                        map(str, episode.descriptors["candidate_left"].semantic_static_steps)
+                    ),
+                    "semantic_dynamic_left_steps": ";".join(
+                        map(str, episode.descriptors["candidate_left"].semantic_dynamic_steps)
+                    ),
+                    "semantic_static_right_steps": ";".join(
+                        map(str, episode.descriptors["candidate_right"].semantic_static_steps)
+                    ),
+                    "semantic_dynamic_right_steps": ";".join(
+                        map(str, episode.descriptors["candidate_right"].semantic_dynamic_steps)
+                    ),
                 }
             )
 
@@ -399,7 +541,54 @@ def _write_predictions(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _write_plots(output_dir: Path, predictions: list[dict[str, Any]]) -> None:
+def _write_semantic_features(path: Path, episodes: list[PreparedEpisode]) -> None:
+    """Write the raw 8D values separately from labels and distance scores."""
+    fieldnames = [
+        "seed",
+        "object",
+        "left_depth_mm",
+        "right_depth_mm",
+        "left_marker_displacement_px",
+        "right_marker_displacement_px",
+        "left_dynamic_displacement_delta_px",
+        "right_dynamic_displacement_delta_px",
+        "left_marker_coherence",
+        "right_marker_coherence",
+        "static_steps",
+        "dynamic_steps",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for episode in episodes:
+            for name in OBJECTS:
+                descriptor = episode.descriptors[name]
+                signature = descriptor.semantic_signature
+                writer.writerow(
+                    {
+                        "seed": episode.seed,
+                        "object": name,
+                        "left_depth_mm": signature[0],
+                        "right_depth_mm": signature[1],
+                        "left_marker_displacement_px": signature[2],
+                        "right_marker_displacement_px": signature[3],
+                        "left_dynamic_displacement_delta_px": signature[4],
+                        "right_dynamic_displacement_delta_px": signature[5],
+                        "left_marker_coherence": signature[6],
+                        "right_marker_coherence": signature[7],
+                        "static_steps": ";".join(map(str, descriptor.semantic_static_steps)),
+                        "dynamic_steps": ";".join(map(str, descriptor.semantic_dynamic_steps)),
+                    }
+                )
+
+
+def _write_plots(
+    output_dir: Path,
+    predictions: list[dict[str, Any]],
+    *,
+    variant: str = "combined",
+) -> None:
     if not predictions:
         return
     os.environ.setdefault("MPLCONFIGDIR", str(output_dir / ".matplotlib"))
@@ -408,14 +597,15 @@ def _write_plots(output_dir: Path, predictions: list[dict[str, Any]]) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    combined = [row for row in predictions if row["variant"] == "combined"]
-    if not combined:
+    selected = [row for row in predictions if row["variant"] == variant]
+    if not selected:
         return
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    match = np.asarray([row["match_distance"] for row in combined])
-    distractor = np.asarray([row["distractor_distance"] for row in combined])
+    prefix = "" if variant == "combined" else f"{variant}_"
+    match = np.asarray([row["match_distance"] for row in selected])
+    distractor = np.asarray([row["distractor_distance"] for row in selected])
     fig, axis = plt.subplots(figsize=(7, 4))
     axis.hist(match, bins="auto", alpha=0.7, label="match")
     axis.hist(distractor, bins="auto", alpha=0.7, label="distractor")
@@ -423,22 +613,22 @@ def _write_plots(output_dir: Path, predictions: list[dict[str, Any]]) -> None:
     axis.set_ylabel("Episodes")
     axis.legend()
     fig.tight_layout()
-    fig.savefig(figures_dir / "distance_distribution.png", dpi=160)
+    fig.savefig(figures_dir / f"{prefix}distance_distribution.png", dpi=160)
     plt.close(fig)
 
-    margin = np.asarray([row["margin"] for row in combined])
+    margin = np.asarray([row["margin"] for row in selected])
     fig, axis = plt.subplots(figsize=(7, 4))
     axis.hist(margin, bins="auto", color="#3478bf")
     axis.axvline(0.0, color="#222222", linewidth=1)
     axis.set_xlabel("Distractor distance - match distance")
     axis.set_ylabel("Episodes")
     fig.tight_layout()
-    fig.savefig(figures_dir / "margin_distribution.png", dpi=160)
+    fig.savefig(figures_dir / f"{prefix}margin_distribution.png", dpi=160)
     plt.close(fig)
 
     index = {class_name: position for position, class_name in enumerate(KNOWN_CLASSES)}
     matrix = np.zeros((len(KNOWN_CLASSES), len(KNOWN_CLASSES)), dtype=int)
-    for row in combined:
+    for row in selected:
         matrix[index[row["reference_class"]], index[row["predicted_class"]]] += 1
     fig, axis = plt.subplots(figsize=(6, 5))
     image = axis.imshow(matrix, cmap="Blues")
@@ -451,7 +641,7 @@ def _write_plots(output_dir: Path, predictions: list[dict[str, Any]]) -> None:
             axis.text(col, row, str(matrix[row, col]), ha="center", va="center")
     fig.colorbar(image, ax=axis)
     fig.tight_layout()
-    fig.savefig(figures_dir / "class_confusion_matrix.png", dpi=160)
+    fig.savefig(figures_dir / f"{prefix}class_confusion_matrix.png", dpi=160)
     plt.close(fig)
 
 
@@ -525,7 +715,14 @@ def run_calibration(
     all_predictions: list[dict[str, Any]] = []
     variant_metrics: dict[str, Any] = {}
     scaler_payload: dict[str, Any] = {}
-    for variant in ("depth_only", "marker_only", "static_only", "dynamic_only", "combined"):
+    for variant in (
+        "depth_only",
+        "marker_only",
+        "static_only",
+        "dynamic_only",
+        "combined",
+        "semantic_signature_8d",
+    ):
         rows, metrics, scaler = _evaluate_variant(episodes, labels, variant, folds, bootstrap_samples)
         all_predictions.extend(rows)
         variant_metrics[variant] = metrics
@@ -537,13 +734,14 @@ def run_calibration(
 
     class_counts = Counter(labels[episode.seed].reference_class for episode in episodes)
     combined_metrics = variant_metrics.get("combined", {})
+    semantic_metrics = variant_metrics.get("semantic_signature_8d", {})
     enough_data = (
         len(episodes) >= min_valid_per_class * len(KNOWN_CLASSES)
         and all(class_counts[class_name] >= min_valid_per_class for class_name in KNOWN_CLASSES)
     )
     accuracy_pass = bool(
-        combined_metrics.get("overall_accuracy", 0.0) >= 0.80
-        and combined_metrics.get("macro_accuracy", 0.0) >= 0.80
+        semantic_metrics.get("overall_accuracy", 0.0) >= 0.80
+        and semantic_metrics.get("macro_accuracy", 0.0) >= 0.80
     )
     summary = {
         "schema_version": DESCRIPTOR_VERSION,
@@ -565,12 +763,28 @@ def run_calibration(
         "descriptor": {
             "static": "per hand: 4x4 depth indentation + 4x4 marker dx/dy",
             "dynamic": "six uniform lift/hold/lower frames; per hand depth/contact/marker summary",
+            "semantic_signature_8d": {
+                "order": [
+                    "left_static_depth_mm",
+                    "right_static_depth_mm",
+                    "left_static_marker_displacement_px",
+                    "right_static_marker_displacement_px",
+                    "left_dynamic_marker_displacement_delta_px",
+                    "right_dynamic_marker_displacement_delta_px",
+                    "left_static_marker_coherence",
+                    "right_static_marker_coherence",
+                ],
+                "static_window": "median of final close frames",
+                "dynamic_window": "six uniform lift/hold frames before weight_lower",
+                "quality": "all static/dynamic bilateral depths exceed 0.5 mm",
+            },
             "dimensions": {
                 "depth_only": 56,
                 "marker_only": 100,
                 "static_only": 96,
                 "dynamic_only": 60,
                 "combined": 156,
+                "semantic_signature_8d": 8,
             },
             "scaling": "five-fold seed-hash split; train-fold median/IQR; no labels, PCA, or classifier fitting",
             "classifier": "argmin scaled Euclidean distance from reference to left/right candidate",
@@ -588,15 +802,21 @@ def run_calibration(
             "required_overall_accuracy": 0.80,
             "required_macro_accuracy": 0.80,
             "enough_balanced_data": enough_data,
-            "combined_accuracy_pass": accuracy_pass,
+            "combined_accuracy_pass": bool(
+                combined_metrics.get("overall_accuracy", 0.0) >= 0.80
+                and combined_metrics.get("macro_accuracy", 0.0) >= 0.80
+            ),
+            "semantic_signature_8d_accuracy_pass": accuracy_pass,
             "calibration_pass": bool(enough_data and accuracy_pass),
         },
     }
     _write_manifest(output_dir / "manifest.jsonl", manifest)
     _write_predictions(output_dir / "predictions.csv", all_predictions)
+    _write_semantic_features(output_dir / "semantic_8d_features.csv", episodes)
     _write_json(output_dir / "descriptor_stats.json", scaler_payload)
     _write_json(output_dir / "summary.json", summary)
     _write_plots(output_dir, all_predictions)
+    _write_plots(output_dir, all_predictions, variant="semantic_signature_8d")
     return summary
 
 
