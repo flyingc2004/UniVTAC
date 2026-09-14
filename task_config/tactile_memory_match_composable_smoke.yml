@@ -1,11 +1,9 @@
-# Public tactile_probe.v3 calibration for composable slot expressions.
-# 56 ordered reference/distractor pairs x 5 repetitions = 280 episodes.
-# The task writes only probe segments and canonical summaries by default.
+# Physical gate for the same-mesh rigid/soft Can_d4cm variants.
 save_dir: ./data
 
 decimation: 1
 save_frequency: 4
-video_frequency: 0
+video_frequency: 1
 render_frequency: 0
 preserve_raw_cache: false
 save_hdf5: false
@@ -15,9 +13,9 @@ livestream: 0
 random_texture: false
 
 use_seed: true
-episode_num: 280
-start_seed: 3000
-max_seed: 3279
+episode_num: 1
+start_seed: 4000
+max_seed: 4000
 
 sensor_type: gsmini
 reset_time_limit: 900
@@ -26,7 +24,8 @@ max_save_frames: 5000
 live_preview_enabled: false
 
 task_cfg_overrides:
-  identity_pair_schedule: balanced_ordered_pairs
+  reference_class_key: light_smooth_soft
+  distractor_class_key: light_smooth_rigid
   probe_min_bilateral_ratio: 0.8
 
 observations:

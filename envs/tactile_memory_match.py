@@ -1,38 +1,29 @@
 from ._base_task import *
-import csv
 import json
 import numpy as np
 
 
+_WEIGHT_VARIANTS = {"light": 300.0, "heavy": 650.0}
+_ROUGHNESS_VARIANTS = {"smooth": 1.5, "rough": 2.8}
+_HARDNESS_VARIANTS = ("rigid", "soft")
+
+# Every physical class deliberately uses the same visible mesh.  The task never
+# exposes this table: it belongs to scene construction and private scoring only.
 TACTILE_CLASSES = {
-    "light_smooth": {
-        "label": "light-smooth",
+    f"{weight}_{roughness}_{hardness}": {
+        "label": f"{weight}-{roughness}-{hardness}",
         "asset": "Can_d4cm.usd",
         "diameter": 4,
-        "density": 300.0,
-        "friction_ratio": 1.5,
-    },
-    "light_rough": {
-        "label": "light-rough",
-        "asset": "Can_d4cm.usd",
-        "diameter": 4,
-        "density": 300.0,
-        "friction_ratio": 2.8,
-    },
-    "heavy_smooth": {
-        "label": "heavy-smooth",
-        "asset": "Can_d4cm.usd",
-        "diameter": 4,
-        "density": 650.0,
-        "friction_ratio": 1.5,
-    },
-    "heavy_rough": {
-        "label": "heavy-rough",
-        "asset": "Can_d4cm.usd",
-        "diameter": 4,
-        "density": 650.0,
-        "friction_ratio": 2.8,
-    },
+        "length": 0.120,
+        "weight": weight,
+        "roughness": roughness,
+        "hardness": hardness,
+        "density": density,
+        "friction_ratio": friction_ratio,
+    }
+    for weight, density in _WEIGHT_VARIANTS.items()
+    for roughness, friction_ratio in _ROUGHNESS_VARIANTS.items()
+    for hardness in _HARDNESS_VARIANTS
 }
 
 CLASS_KEYS = tuple(TACTILE_CLASSES)
@@ -42,7 +33,9 @@ ORDERED_CLASS_PAIRS = tuple(
     for distractor_key in CLASS_KEYS
     if reference_key != distractor_key
 )
-TACTILE_PROBE_SCHEMA_VERSION = "tactile_probe.v2"
+TACTILE_PROBE_SCHEMA_VERSION = "tactile_probe.v3"
+PUBLIC_PROBE_RESPONSE_SCHEMA_VERSION = "public_probe_response.v1"
+PUBLIC_PROBE_PROTOCOL_ID = "symmetric_side_grasp_preload_lift_hold_release.v3"
 TACTILE_PROBE_FIELDS = (
     "depth_mm",
     "marker_displacement_px",
@@ -55,11 +48,11 @@ class TaskCfg(BaseTaskCfg):
     step_lim = 500
     use_adaptive_grasp = True
     adaptive_grasp_depth_threshold = 27.75
-    # The default preserves the historical randomized task.  The balanced
-    # schedule is collection-only support for auditing the expert comparator.
+    # The balanced schedule maps five consecutive repetitions onto every
+    # ordered pair among the eight hidden physical combinations.
     identity_pair_schedule: Literal["random", "balanced_ordered_pairs"] = "random"
-    reference_class_key: Literal["random", "light_smooth", "light_rough", "heavy_smooth", "heavy_rough"] = "random"
-    distractor_class_key: Literal["random", "light_smooth", "light_rough", "heavy_smooth", "heavy_rough"] = "random"
+    reference_class_key: str = "random"
+    distractor_class_key: str = "random"
     probe_capture_steps: int = 6
     probe_min_bilateral_ratio: float = 0.8
 
@@ -147,6 +140,7 @@ class Task(BaseTask):
                 name=f"reference_variant_{idx}",
                 asset_path=str(class_cfg["asset"]),
                 pose=pose,
+                constitution_cfg=self._constitution_for_variant(class_cfg),
                 density=float(class_cfg["density"]),
                 friction_ratio=float(class_cfg["friction_ratio"]),
             )
@@ -154,6 +148,7 @@ class Task(BaseTask):
                 name=f"candidate_variant_{idx}",
                 asset_path=str(class_cfg["asset"]),
                 pose=self._stash_pose(idx + len(TACTILE_CLASSES)),
+                constitution_cfg=self._constitution_for_variant(class_cfg),
                 density=float(class_cfg["density"]),
                 friction_ratio=float(class_cfg["friction_ratio"]),
             )
@@ -257,12 +252,21 @@ class Task(BaseTask):
             "candidate_left": {},
             "candidate_right": {},
         }
+        self._probe_raw_records = {
+            "reference": {},
+            "candidate_left": {},
+            "candidate_right": {},
+        }
+        self._active_probe_segment = None
         self.metadata.update(
             {
+                # This complete dictionary is private and is written to
+                # private_metadata.json only.  Public metadata is assembled in
+                # _public_episode_record and contains no labels or poses.
                 "reference_class": str(self.reference_class["label"]),
-                "reference_variant": self._public_variant(self.reference_class),
+                "reference_class_key": self.reference_class_key,
                 "distractor_class": str(self.distractor_class["label"]),
-                "distractor_variant": self._public_variant(self.distractor_class),
+                "distractor_class_key": self.distractor_class_key,
                 "match_candidate_public_name": self.match_candidate_public_name,
                 "distractor_candidate_public_name": self.distractor_candidate_public_name,
                 "candidate_left_internal_role": (
@@ -405,71 +409,127 @@ class Task(BaseTask):
         self.delay(20, is_save=False)
 
     def _probe_reference(self) -> bool:
-        self.active_public_name = "reference_object"
-        self.task_phase = "reference_grasp"
-        if not self._close_current_grasp("reference_close"):
-            self._mark_failure("reference_close_failed")
-            return False
-        probe = self._capture_object_probe("reference", phase="reference_probe")
+        response = self.run_public_probe("reference_object")
+        probe = response["probe"]
         self.reference_touched = bool(probe["quality"]["preload_bilateral_contact_ratio"] > 0.0)
         self.reference_tactile_probe_valid = bool(probe["quality"]["valid"])
-        self._role_move("reference_object", self.atom.open_gripper(1.0), tag="reference_release_open", is_save=True)
-        self.delay(10, is_save=True)
         self._sync_metadata()
-        return True
+        return bool(response["execution"]["approach_ok"])
 
     def _probe_candidate(self, public_name: str) -> bool:
-        self.active_public_name = public_name
-        self.task_phase = f"{public_name}_probe"
-        actor = self.public_candidate_actors[public_name]
-        if not self._move_to_actor_grasp(public_name, actor, tag=f"{public_name}_probe_grasp_actor"):
-            self._mark_failure(f"{public_name}_probe_approach_failed")
-            return False
-        if not self._close_current_grasp(f"{public_name}_probe_close"):
-            self._mark_failure(f"{public_name}_probe_close_failed")
-            return False
-        probe = self._capture_object_probe(public_name, phase=f"{public_name}_probe")
+        response = self.run_public_probe(public_name)
+        probe = response["probe"]
         self.candidate_touched[public_name] = bool(probe["quality"]["preload_bilateral_contact_ratio"] > 0.0)
-        self.move(self.atom.open_gripper(1.0), tag=f"{public_name}_probe_open", is_save=True)
-        self.delay(10, is_save=True)
         self._sync_metadata()
-        return True
+        return bool(response["execution"]["approach_ok"])
 
-    def _capture_object_probe(self, key: str, *, phase: str) -> dict:
-        """Record a symmetric public preload/lift probe for one object."""
+    def get_public_probe_spec(self) -> dict:
+        """Return the fixed, label-free measurement protocol for every object."""
+        return {
+            "schema_version": "public_probe_spec.v1",
+            "protocol_id": PUBLIC_PROBE_PROTOCOL_ID,
+            "side_grasp": True,
+            "adaptive_close": True,
+            "preload_steps": int(self.probe_delay_steps),
+            "lift_height": float(self.weight_probe_lift_height),
+            "hold_steps": int(self.weight_probe_hold_steps),
+            "lower_settle_steps": int(self.weight_probe_return_steps),
+            "min_bilateral_contact_ratio": float(self.cfg.probe_min_bilateral_ratio),
+            "release_then_clearance": True,
+        }
+
+    def run_public_probe(self, object_name: str) -> dict:
+        """Execute the benchmark probe and return raw tactile data plus v3 summary.
+
+        This is a controlled measurement primitive, not a memory, scorer, pose
+        service, or candidate selector.  It intentionally has no access to
+        physical labels in its return value.
+        """
+        public_name = self._resolve_public_object_name(object_name)
+        if public_name is None:
+            raise KeyError(f"Unknown public probe object: {object_name!r}")
+        key = "reference" if public_name == "reference_object" else public_name
+        actor = self.public_actor_map[public_name]
+        self.active_public_name = public_name
         previous_phase = self.task_phase
-        self.task_phase = f"{phase}_preload"
-        self.delay(self.probe_delay_steps, is_save=True)
-        preload = self._capture_tactile_window()
+        self.task_phase = f"{key}_probe_approach"
+        self._probe_raw_records[key] = {"preload": [], "lift_motion": [], "hold": []}
 
-        self.task_phase = f"{phase}_lift"
-        lift_ok = self._role_move(
-            self.active_public_name or key,
-            self.atom.move_by_displacement(z=float(self.weight_probe_lift_height), xyz_coord="world"),
-            tag=f"{key}_probe_lift",
-            time_dilation_factor=0.5,
-            is_save=True,
+        approach_ok = self._move_to_actor_grasp(public_name, actor, tag=f"{key}_probe_grasp_actor")
+        close_ok = bool(approach_ok and self._close_current_grasp(f"{key}_probe_close"))
+        preload = self._capture_probe_stationary_segment(key, "preload", self.probe_delay_steps)
+        bilateral_gate = bool(
+            close_ok
+            and preload["bilateral_contact_ratio"] >= float(self.cfg.probe_min_bilateral_ratio)
         )
-        self.delay(self.weight_probe_hold_steps, is_save=True)
-        self.task_phase = f"{phase}_loaded_lift"
-        loaded_lift = self._capture_tactile_window()
 
-        if lift_ok:
-            self.task_phase = f"{phase}_lower"
-            self._role_move(
-                self.active_public_name or key,
-                self.atom.move_by_displacement(z=-float(self.weight_probe_lift_height), xyz_coord="world"),
-                tag=f"{key}_probe_lower",
+        self.task_phase = f"{key}_probe_lift"
+        self._begin_probe_segment(key, "lift_motion")
+        lift_ok = bool(
+            bilateral_gate
+            and self._role_move(
+                public_name,
+                self.atom.move_by_displacement(z=float(self.weight_probe_lift_height), xyz_coord="world"),
+                tag=f"{key}_probe_lift",
                 time_dilation_factor=0.5,
                 is_save=True,
+                delay=False,
+            )
+        )
+        lift_motion = self._end_probe_segment(key, "lift_motion")
+
+        hold = self._capture_probe_stationary_segment(key, "hold", self.weight_probe_hold_steps)
+        lower_ok = True
+        if lift_ok:
+            self.task_phase = f"{key}_probe_lower"
+            lower_ok = bool(
+                self._role_move(
+                    public_name,
+                    self.atom.move_by_displacement(z=-float(self.weight_probe_lift_height), xyz_coord="world"),
+                    tag=f"{key}_probe_lower",
+                    time_dilation_factor=0.5,
+                    is_save=True,
+                    delay=False,
+                )
             )
             self.delay(self.weight_probe_return_steps, is_save=True)
 
-        probe = self._build_tactile_probe(key, preload, loaded_lift, lift_ok=bool(lift_ok))
+        self.task_phase = f"{key}_probe_release"
+        release_ok = bool(self._role_move(public_name, self.atom.open_gripper(1.0), tag=f"{key}_probe_open", is_save=True))
+        self.delay(4, is_save=True)
+        clearance_ok = self._move_gripper_center_to_z(self.safe_gripper_z, tag=f"{key}_probe_clearance")
+        probe = self._build_tactile_probe(
+            key,
+            preload,
+            lift_motion,
+            hold,
+            approach_ok=approach_ok,
+            close_ok=close_ok,
+            bilateral_gate=bilateral_gate,
+            lift_ok=lift_ok,
+            lower_ok=lower_ok,
+            release_ok=release_ok,
+            clearance_ok=clearance_ok,
+        )
         self._store_tactile_probe(key, probe)
         self.task_phase = previous_phase
         self._sync_metadata()
-        return probe
+        return {
+            "schema_version": PUBLIC_PROBE_RESPONSE_SCHEMA_VERSION,
+            "object_name": public_name,
+            "protocol": self.get_public_probe_spec(),
+            "probe": probe,
+            "raw": self._probe_raw_records[key],
+            "execution": {
+                "approach_ok": bool(approach_ok),
+                "close_ok": bool(close_ok),
+                "bilateral_gate": bool(bilateral_gate),
+                "lift_ok": bool(lift_ok),
+                "lower_ok": bool(lower_ok),
+                "release_ok": bool(release_ok),
+                "clearance_ok": bool(clearance_ok),
+            },
+        }
 
     def _select_and_place_candidate(self, public_name: str) -> bool:
         self.selected_candidate = public_name
@@ -628,6 +688,9 @@ class Task(BaseTask):
     def _step(self, is_save: bool = True):
         ret = super()._step(is_save=is_save)
         self._update_task_state()
+        if self._active_probe_segment is not None:
+            key, segment = self._active_probe_segment
+            self._probe_raw_records[key][segment].append(self._read_tactile_measurement(include_raw=True))
         self._record_tactile_timeline()
         return ret
 
@@ -743,67 +806,21 @@ class Task(BaseTask):
         return True
 
     def get_public_pose_map(self) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
-        quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        return {
-            "reference_object": (
-                np.asarray(self.reference_object.get_pose().p, dtype=np.float32).reshape(3),
-                quat.copy(),
-                np.array([0.04, 0.04, 0.12], dtype=np.float32),
-            ),
-            "candidate_left": (
-                np.asarray(self.public_candidate_actors["candidate_left"].get_pose().p, dtype=np.float32).reshape(3),
-                quat.copy(),
-                np.array([0.04, 0.04, 0.12], dtype=np.float32),
-            ),
-            "candidate_right": (
-                np.asarray(self.public_candidate_actors["candidate_right"].get_pose().p, dtype=np.float32).reshape(3),
-                quat.copy(),
-                np.array([0.04, 0.04, 0.12], dtype=np.float32),
-            ),
-            "match_slot": (
-                np.asarray(self.match_slot_pose.p, dtype=np.float32).reshape(3),
-                quat.copy(),
-                np.array([0.10, 0.10, 0.03], dtype=np.float32),
-            ),
-        }
+        """No live actor poses are part of the composable-probe benchmark."""
+        return {}
 
     def get_public_regions(self) -> dict:
-        return {
-            "reference_region": self._region_record(self.reference_xy, "reference"),
-            "candidate_left_region": self._region_record(self.candidate_xy["candidate_left"], "candidate"),
-            "candidate_right_region": self._region_record(self.candidate_xy["candidate_right"], "candidate"),
-            "match_slot_region": {
-                "kind": "place",
-                "center_xy": [float(self.match_slot_xy[0]), float(self.match_slot_xy[1])],
-                "half_extents": self.pad_half_extents.tolist(),
-                "hover_z": float(self.safe_gripper_z),
-                "release_z": float(self.match_slot_pose.p[2] + self.release_z_clearance),
-                "description": "public placement region for the selected matching candidate",
-            },
-        }
+        """Legacy region service is intentionally disabled for this benchmark."""
+        return {}
 
     def get_public_grasp_actor(self, object_name: str):
-        key = self._resolve_public_object_name(object_name)
-        if key is None:
-            return None
-        return self.public_actor_map.get(key)
+        raise RuntimeError("tactile_memory_match exposes run_public_probe(), not live actors")
 
     def get_public_grasp_pose(self, object_name: str, *, grasp_height: float = 0.04):
-        key = self._resolve_public_object_name(object_name)
-        if key is None:
-            raise KeyError(f"public grasp object {object_name!r} is not available")
-        actor = self.public_actor_map[key]
-        grasp_pose = self._lift_can_style_grasp_pose(actor)
-        return (
-            np.asarray(grasp_pose.p, dtype=np.float32),
-            np.asarray(grasp_pose.q, dtype=np.float32),
-        )
+        raise RuntimeError("tactile_memory_match exposes run_public_probe(), not grasp poses")
 
     def make_public_grasp_pose(self, object_name: str, actor: Actor | None = None, *, grasp_height: float = 0.04):
-        key = self._resolve_public_object_name(object_name)
-        if key is None:
-            raise KeyError(f"public grasp object {object_name!r} is not available")
-        return self._lift_can_style_grasp_pose(actor or self.public_actor_map[key])
+        raise RuntimeError("tactile_memory_match exposes run_public_probe(), not grasp poses")
 
     def _resolve_public_object_name(self, object_name: str) -> str | None:
         key = str(object_name).strip().lower().replace(" ", "_")
@@ -832,28 +849,46 @@ class Task(BaseTask):
             "search_z_range": [0.018, float(self.safe_gripper_z)],
         }
 
-    def _capture_tactile_window(self) -> dict:
-        frames = []
-        for index in range(int(self.cfg.probe_capture_steps)):
-            frames.append(self._read_tactile_measurement())
-            if index + 1 < int(self.cfg.probe_capture_steps):
-                self.delay(1, is_save=True)
-        return self._aggregate_tactile_window(frames)
+    def _begin_probe_segment(self, key: str, segment: str):
+        self._active_probe_segment = (key, segment)
 
-    def _read_tactile_measurement(self) -> dict:
+    def _end_probe_segment(self, key: str, segment: str) -> dict:
+        if self._active_probe_segment != (key, segment):
+            raise RuntimeError(f"Probe segment state mismatch for {key}/{segment}")
+        self._active_probe_segment = None
+        frames = self._probe_raw_records[key][segment]
+        return self._aggregate_tactile_window(frames) if frames else self._empty_tactile_window()
+
+    def _capture_probe_stationary_segment(self, key: str, segment: str, steps: int) -> dict:
+        self.task_phase = f"{key}_probe_{segment}"
+        self._begin_probe_segment(key, segment)
+        self.delay(int(steps), is_save=True)
+        return self._end_probe_segment(key, segment)
+
+    def _read_tactile_measurement(self, *, include_raw: bool = False) -> dict:
         try:
             tactile_obs = self._tactile_manager.get_observations(["depth", "marker"])
         except Exception:
             tactile_obs = {}
         left = self._tactile_hand_measurement(tactile_obs.get("left_tactile", {}))
         right = self._tactile_hand_measurement(tactile_obs.get("right_tactile", {}))
-        return {
+        measurement = {
             "step": int(self.step_count),
             "left": left,
             "right": right,
             "both_contact": bool(left["contact"] and right["contact"]),
             "gripper_qpos": float(self._robot_manager.get_gripper_qpos()),
+            "control_frame": {"atom_id": int(self.atom_id), "atom_tag": str(self.atom_tag)},
         }
+        if include_raw:
+            measurement["raw"] = {}
+            for hand, source in (("left", "left_tactile"), ("right", "right_tactile")):
+                hand_obs = tactile_obs.get(source, {})
+                for field in ("depth", "marker"):
+                    value = self._as_numpy(hand_obs.get(field))
+                    if value is not None:
+                        measurement["raw"][f"{hand}_{field}"] = np.asarray(value).copy()
+        return measurement
 
     def _tactile_hand_measurement(self, hand_obs: dict) -> dict:
         depth = self._as_numpy(hand_obs.get("depth"))
@@ -904,6 +939,15 @@ class Task(BaseTask):
             values = [float(frame[hand][field]) for frame in frames]
             return float(np.median(values))
 
+        def mad(hand: str, field: str) -> float:
+            values = np.asarray([float(frame[hand][field]) for frame in frames], dtype=np.float64)
+            return float(np.median(np.abs(values - np.median(values))))
+
+        def field_stats(hand: str, field: str) -> dict:
+            value = median(hand, field)
+            noise = mad(hand, field)
+            return {"value": value, "mad": noise, "snr": float(abs(value) / max(noise, 1e-6))}
+
         bilateral_ratio = float(np.mean([frame["both_contact"] for frame in frames]))
         return {
             "frame_count": len(frames),
@@ -912,43 +956,85 @@ class Task(BaseTask):
             "bilateral_contact_ratio": bilateral_ratio,
             "left": {field: median("left", field) for field in (*TACTILE_PROBE_FIELDS, "contact_area")},
             "right": {field: median("right", field) for field in (*TACTILE_PROBE_FIELDS, "contact_area")},
+            "noise": {
+                hand: {field: field_stats(hand, field) for field in (*TACTILE_PROBE_FIELDS, "contact_area")}
+                for hand in ("left", "right")
+            },
             "gripper_qpos": float(np.median([frame["gripper_qpos"] for frame in frames])),
         }
 
-    def _build_tactile_probe(self, key: str, preload: dict, loaded_lift: dict, *, lift_ok: bool) -> dict:
+    @staticmethod
+    def _empty_tactile_window() -> dict:
+        fields = (*TACTILE_PROBE_FIELDS, "contact_area")
+        return {
+            "frame_count": 0,
+            "start_step": None,
+            "end_step": None,
+            "bilateral_contact_ratio": 0.0,
+            "left": {field: 0.0 for field in fields},
+            "right": {field: 0.0 for field in fields},
+            "noise": {
+                hand: {field: {"value": 0.0, "mad": 0.0, "snr": 0.0} for field in fields}
+                for hand in ("left", "right")
+            },
+            "gripper_qpos": 0.0,
+        }
+
+    def _build_tactile_probe(
+        self,
+        key: str,
+        preload: dict,
+        lift_motion: dict,
+        hold: dict,
+        *,
+        approach_ok: bool,
+        close_ok: bool,
+        bilateral_gate: bool,
+        lift_ok: bool,
+        lower_ok: bool,
+        release_ok: bool,
+        clearance_ok: bool,
+    ) -> dict:
         delta = {
             hand: {
-                field: float(loaded_lift[hand][field] - preload[hand][field])
+                field: float(lift_motion[hand][field] - preload[hand][field])
                 for field in TACTILE_PROBE_FIELDS
             }
             for hand in ("left", "right")
         }
         preload_ratio = float(preload["bilateral_contact_ratio"])
-        loaded_ratio = float(loaded_lift["bilateral_contact_ratio"])
+        lift_ratio = float(lift_motion["bilateral_contact_ratio"])
+        hold_ratio = float(hold["bilateral_contact_ratio"])
         valid = bool(
-            lift_ok
+            approach_ok
+            and close_ok
+            and bilateral_gate
+            and lift_ok
             and preload_ratio >= float(self.cfg.probe_min_bilateral_ratio)
-            and loaded_ratio >= float(self.cfg.probe_min_bilateral_ratio)
+            and lift_ratio >= float(self.cfg.probe_min_bilateral_ratio)
         )
         return {
             "schema_version": TACTILE_PROBE_SCHEMA_VERSION,
             "object_name": key,
-            "protocol": {
-                "id": "symmetric_close_preload_lift_hold.v2",
-                "preload_capture_steps": int(self.cfg.probe_capture_steps),
-                "lift_height": float(self.weight_probe_lift_height),
-                "lift_hold_steps": int(self.weight_probe_hold_steps),
-                "min_bilateral_contact_ratio": float(self.cfg.probe_min_bilateral_ratio),
-            },
+            "protocol_id": PUBLIC_PROBE_PROTOCOL_ID,
             "quality": {
                 "valid": valid,
+                "approach_ok": bool(approach_ok),
+                "close_ok": bool(close_ok),
+                "bilateral_gate": bool(bilateral_gate),
                 "lift_command_ok": bool(lift_ok),
+                "lower_ok": bool(lower_ok),
+                "release_ok": bool(release_ok),
+                "clearance_ok": bool(clearance_ok),
                 "preload_bilateral_contact_ratio": preload_ratio,
-                "loaded_lift_bilateral_contact_ratio": loaded_ratio,
+                "lift_motion_bilateral_contact_ratio": lift_ratio,
+                "hold_bilateral_contact_ratio": hold_ratio,
+                "lift_motion_frame_count": int(lift_motion["frame_count"]),
             },
             "preload": preload,
-            "loaded_lift": loaded_lift,
-            "delta": delta,
+            "lift_motion": lift_motion,
+            "hold": hold,
+            "lift_minus_preload": delta,
         }
 
     def _store_tactile_probe(self, key: str, probe: dict):
@@ -1007,21 +1093,63 @@ class Task(BaseTask):
 
     def _save_metadata(self):
         self._sync_metadata()
-        super()._save_metadata()
-        if not hasattr(self, "tactile_timeline"):
-            return
-        timeline_dir = self.save_root / "tactile_memory_match_timeline"
-        timeline_dir.mkdir(parents=True, exist_ok=True)
-        json_path = timeline_dir / f"{self.cfg.seed}.json"
-        csv_path = timeline_dir / f"{self.cfg.seed}.csv"
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(self.tactile_timeline, f, indent=2)
-        if self.tactile_timeline:
-            fieldnames = sorted({key for row in self.tactile_timeline for key in row.keys()})
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(self.tactile_timeline)
+        raw_path = self._save_public_probe_raw()
+        public_record = {
+            "schema_version": "tactile_memory_match_public_episode.v3",
+            "seed": int(self.cfg.seed),
+            "task": "tactile_memory_match",
+            "probe_spec": self.get_public_probe_spec(),
+            "probes": self.tactile_probes,
+            "raw_probe_path": str(raw_path.relative_to(self.save_root)),
+        }
+        self._update_seed_json(self.metadata_path, public_record)
+        private_record = {
+            "schema_version": "tactile_memory_match_private_episode.v3",
+            "seed": int(self.cfg.seed),
+            **self.metadata,
+        }
+        self._update_seed_json(self.save_root / "private_metadata.json", private_record)
+
+    def _save_public_probe_raw(self) -> Path:
+        """Persist only public raw probe segments, never the full episode cache."""
+        raw_dir = self.save_root / "public_probe"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / f"{self.cfg.seed}.npz"
+        arrays: dict[str, np.ndarray] = {}
+        for object_key, segments in self._probe_raw_records.items():
+            for segment_name, frames in segments.items():
+                prefix = f"{object_key}__{segment_name}"
+                arrays[f"{prefix}__step"] = np.asarray([frame["step"] for frame in frames], dtype=np.int64)
+                arrays[f"{prefix}__gripper_qpos"] = np.asarray(
+                    [frame["gripper_qpos"] for frame in frames], dtype=np.float32
+                )
+                arrays[f"{prefix}__atom_id"] = np.asarray(
+                    [frame["control_frame"]["atom_id"] for frame in frames], dtype=np.int64
+                )
+                arrays[f"{prefix}__atom_tag"] = np.asarray(
+                    [frame["control_frame"]["atom_tag"] for frame in frames], dtype="U96"
+                )
+                for raw_name in ("left_depth", "right_depth", "left_marker", "right_marker"):
+                    values = [frame.get("raw", {}).get(raw_name) for frame in frames]
+                    values = [value for value in values if value is not None]
+                    if values:
+                        arrays[f"{prefix}__{raw_name}"] = np.stack(values).astype(np.float32, copy=False)
+        np.savez_compressed(raw_path, **arrays)
+        return raw_path
+
+    @staticmethod
+    def _update_seed_json(path: Path, record: dict):
+        if path.exists():
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except (OSError, ValueError):
+                payload = {}
+        else:
+            payload = {}
+        payload[str(record.get("seed", "unknown"))] = record
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
 
     def check_success(self):
         self._update_task_state()
@@ -1034,6 +1162,16 @@ class Task(BaseTask):
     @staticmethod
     def _stash_pose(idx: int) -> Pose:
         return Pose([-2.0, -2.0 - 0.12 * idx, 0.021], [1.0, 0.0, 0.0, 0.0])
+
+    @staticmethod
+    def _constitution_for_variant(variant: dict):
+        """Return the declared material model without a geometry fallback."""
+        if str(variant["hardness"]) == "soft":
+            return UipcObjectCfg.StableNeoHookeanCfg(
+                youngs_modulus=0.1,
+                poisson_rate=0.45,
+            )
+        return None
 
     @staticmethod
     def _resting_z(variant: dict) -> float:
