@@ -111,7 +111,7 @@ def log(msg):
         f.write(msg + '\n')
     print(msg)
 
-def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed):
+def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed, save_hdf5: bool = True):
     suc_num, seed = 0, 0
     suc_map_path = task.save_root / 'suc_map.txt'
     if suc_map_path.exists():
@@ -150,7 +150,8 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed):
             task.clean_cache(mean_steps=mean_steps, result='error')
         else:
             if task.plan_success and task.check_success() and not task.check_early_stop():
-                task.save_to_hdf5()
+                if save_hdf5:
+                    task.save_to_hdf5()
                 log(f"[{suc_num:<3d}] Seed {seed} success in {cost_t:.2f} s.\n"
                     f"steps: {task.step_count:<5d}, save frames: {task.save_count:<5d}.\n")
                 suc_num += 1
@@ -198,6 +199,13 @@ def main():
 
     task_module = importlib.import_module(f"envs.{task_file_name}")
     env_cfg:'BaseTaskCfg' = task_module.TaskCfg()
+    task_cfg_overrides = task_config.get("task_cfg_overrides", {})
+    if not isinstance(task_cfg_overrides, dict):
+        raise TypeError("task_cfg_overrides must be a mapping")
+    for key, value in task_cfg_overrides.items():
+        if not hasattr(env_cfg, key):
+            raise KeyError(f"Unknown TaskCfg override for {task_file_name}: {key}")
+        setattr(env_cfg, key, value)
     env_cfg.tactile_sensor_type = task_config.get('sensor_type', 'gsmini')
     env_cfg.save_dir = Path(task_config.get("save_dir", "./data")) / task_file_name / task_config_file.stem
     env_cfg.decimation = task_config.get("decimation", env_cfg.decimation)
@@ -250,12 +258,14 @@ def main():
     log(f"Init cost {init_cost:.2f} seconds, devices: {os.environ.get('CUDA_VISIBLE_DEVICES')}")
     if env_cfg.live_preview_enabled:
         log(f"Live preview: {env_cfg.live_preview_path} stride={env_cfg.live_preview_stride}")
+    log(f"Save HDF5: {get_bool_config(task_config, 'save_hdf5', True)}")
     run(
         task,
         episode_num=episode_num,
         use_seed=task_config.get("use_seed", True),
         start_seed=start_seed,
         max_seed=max_seed,
+        save_hdf5=get_bool_config(task_config, "save_hdf5", True),
     )
 
 if __name__ == "__main__":

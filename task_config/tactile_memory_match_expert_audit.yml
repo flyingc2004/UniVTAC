@@ -1,0 +1,32 @@
+# Balanced expert-comparator audit.  This stores metadata only: the task's
+# tactile signatures and scores are sufficient for the audit, so raw pkl
+# frames are deliberately not retained.
+save_dir: ./data
+
+decimation: 1
+save_frequency: 4
+video_frequency: 0
+render_frequency: 0
+preserve_raw_cache: false
+save_hdf5: false
+headless: true
+livestream: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 120
+start_seed: 1000
+max_seed: 1119
+
+sensor_type: gsmini
+reset_time_limit: 900
+step_lim: 500
+max_save_frames: 5000
+live_preview_enabled: false
+
+task_cfg_overrides:
+  identity_pair_schedule: balanced_ordered_pairs
+
+observations:
+  tactile: ['marker', 'depth']
