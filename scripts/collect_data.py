@@ -113,6 +113,7 @@ def log(msg):
 
 def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed, save_hdf5: bool = True):
     suc_num, seed = 0, 0
+    attempted_num = 0
     suc_map_path = task.save_root / 'suc_map.txt'
     if suc_map_path.exists():
         with open(suc_map_path, 'r') as f:
@@ -139,6 +140,7 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed, save_hdf5
 
     mean_steps = 0.0
     while suc_num < episode_num and (max_seed == -1 or seed <= max_seed):
+        attempted_num += 1
         try:
             start_t = time.perf_counter()
             task.reset(seed=seed)
@@ -172,7 +174,8 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed, save_hdf5
         
         seed += 1
     
-    log(f'Complete collection, success rate: {suc_num}/{seed} ({(suc_num / seed) * 100:.2f}%)')
+    success_rate = (suc_num / attempted_num * 100.0) if attempted_num else 0.0
+    log(f'Complete collection, success rate: {suc_num}/{attempted_num} ({success_rate:.2f}%)')
 
     task.close()
     simulation_app.close()
