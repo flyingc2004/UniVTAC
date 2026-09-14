@@ -688,8 +688,9 @@ class Task(BaseTask):
     def _step(self, is_save: bool = True):
         ret = super()._step(is_save=is_save)
         self._update_task_state()
-        if self._active_probe_segment is not None:
-            key, segment = self._active_probe_segment
+        active_probe_segment = getattr(self, "_active_probe_segment", None)
+        if active_probe_segment is not None:
+            key, segment = active_probe_segment
             self._probe_raw_records[key][segment].append(self._read_tactile_measurement(include_raw=True))
         self._record_tactile_timeline()
         return ret
