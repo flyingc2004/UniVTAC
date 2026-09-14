@@ -173,7 +173,10 @@ class Actor(UipcObject):
             else:
                 view(is_constrained)[:] = 1
                 aim_position_view = view(geo.vertices().find(builtin.aim_position))
-                aim_position_view[:] = self.next_pts.reshape(1, -1, 3)
+                # UIPC stores vertex aim positions with a backend-specific
+                # trailing coordinate dimension.  Match the view shape instead
+                # of assuming the affine-body batch layout.
+                aim_position_view[:] = self.next_pts.reshape(aim_position_view.shape)
  
         if self.next_status == 'unset':
             self.next_status = None
