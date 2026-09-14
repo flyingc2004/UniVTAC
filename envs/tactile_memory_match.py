@@ -558,15 +558,31 @@ class Task(BaseTask):
             self._mark_failure(f"{public_name}_final_lift_failed")
             return False
         self.delay(12, is_save=True)
-        self.metadata[f"{public_name}_final_lift_delta"] = float(actor.get_pose().p[2] - start_z)
+        final_lift_delta = float(actor.get_pose().p[2] - start_z)
+        self.metadata[f"{public_name}_final_lift_delta"] = final_lift_delta
+        if final_lift_delta < 0.010:
+            self._mark_failure(f"{public_name}_final_lift_not_following")
+            return False
 
         self.task_phase = "candidate_place"
-        if not self._transport_held_actor_xy(public_name, actor, self.match_slot_pose.p[:2]):
-            self._mark_failure(f"{public_name}_transport_failed")
-            return False
-        release_z = float(self.match_slot_pose.p[2] + self.release_z_clearance)
-        if not self._descend_held_actor_to_z(public_name, actor, release_z):
-            self._mark_failure(f"{public_name}_descend_failed")
+        # Soft bodies do not have a reliable rigid center while compressed.
+        # Use the same single planned placement primitive that VitaForge's
+        # soft/hard expert uses, rather than repeatedly chasing a Kabsch pose.
+        place_actions = self.atom.place_actor(
+            actor,
+            target_pose=self.match_slot_pose,
+            pre_dis=0.0,
+            dis=0.0,
+            is_open=False,
+        )
+        if not self._role_move(
+            public_name,
+            place_actions,
+            tag=f"{public_name}_final_place_actor",
+            time_dilation_factor=0.5,
+            is_save=True,
+        ):
+            self._mark_failure(f"{public_name}_place_failed")
             return False
         if not self._role_move(public_name, self.atom.open_gripper(1.0), tag=f"{public_name}_release_open", is_save=True):
             self._mark_failure(f"{public_name}_release_failed")
