@@ -565,25 +565,59 @@ class Task(BaseTask):
             return False
 
         self.task_phase = "candidate_place"
-        # Soft bodies do not have a reliable rigid center while compressed.
-        # Use the same single planned placement primitive that VitaForge's
-        # soft/hard expert uses, rather than repeatedly chasing a Kabsch pose.
-        place_actions = self.atom.place_actor(
+        # Derive the final EE target once, then explicitly separate transport
+        # from descent.  A direct place_actor(..., pre_dis=0) move follows a
+        # diagonal path into the pad, which can strike and deform the can.
+        place_pose = self.atom.get_place_pose(
             actor,
             target_pose=self.match_slot_pose,
             pre_dis=0.0,
-            dis=0.0,
-            is_open=False,
         )
+        if place_pose is None:
+            self._mark_failure(f"{public_name}_place_pose_failed")
+            return False
+
+        if not self._move_gripper_center_to_z(
+            self.safe_gripper_z,
+            tag=f"{public_name}_transport_lift_clearance",
+        ):
+            self._mark_failure(f"{public_name}_transport_lift_failed")
+            return False
+
+        # Preserve the placement grasp transform while moving only in XY at
+        # the current clearance height.  The next action has identical XY and
+        # is therefore a vertical-only descent to the release pose.
+        place_gripper = self._robot_manager.ee_to_gripper_center(place_pose)
+        current_gripper = self._robot_manager.get_gripper_center_pose()
+        hover_gripper = Pose(
+            [place_gripper.p[0], place_gripper.p[1], max(float(current_gripper.p[2]), self.safe_gripper_z)],
+            place_gripper.q,
+        )
+        hover_ee = self._robot_manager.gripper_center_to_ee(hover_gripper)
         if not self._role_move(
             public_name,
-            place_actions,
-            tag=f"{public_name}_final_place_actor",
+            self.atom.move_to_pose(hover_ee),
+            tag=f"{public_name}_transport_horizontal",
             time_dilation_factor=0.5,
             is_save=True,
         ):
-            self._mark_failure(f"{public_name}_place_failed")
+            self._mark_failure(f"{public_name}_transport_horizontal_failed")
             return False
+        self.delay(8, is_save=True)
+
+        if not self._role_move(
+            public_name,
+            self.atom.move_to_pose(place_pose),
+            tag=f"{public_name}_transport_descend",
+            time_dilation_factor=0.5,
+            is_save=True,
+        ):
+            self._mark_failure(f"{public_name}_transport_descend_failed")
+            return False
+        self.delay(8, is_save=True)
+        self.metadata[f"{public_name}_transport_mode"] = "lift_horizontal_descend"
+        self._sync_metadata()
+
         if not self._role_move(public_name, self.atom.open_gripper(1.0), tag=f"{public_name}_release_open", is_save=True):
             self._mark_failure(f"{public_name}_release_failed")
             return False
