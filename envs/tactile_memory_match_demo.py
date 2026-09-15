@@ -24,13 +24,13 @@ from isaaclab.utils import configclass
 
 @configclass
 class TaskCfg(BenchmarkTaskCfg):
-    video_size = (1440, 360)
+    video_size = (1920, 480)
 
 
 class Task(BenchmarkTask):
     """Benchmark wrapper that shows a demo-only working-memory card."""
 
-    _panel_width = 360
+    _panel_width = 780
     _panel_background = (20, 27, 35)
     _panel_text = (238, 242, 245)
     _panel_ok = (89, 201, 132)
@@ -152,7 +152,7 @@ class Task(BenchmarkTask):
         y = 24
         y = self._panel_line(panel, "TACTILE MEMORY DEMO", y, 0.62, self._panel_accent, 2)
         y = self._panel_line(panel, phase, y, 0.40, self._panel_text)
-        y += 6
+        y += 3
 
         evidence = memory.get("evidence", {})
         for name, short in (("reference", "A reference"), ("candidate_left", "B left"), ("candidate_right", "C right")):
@@ -162,9 +162,17 @@ class Task(BenchmarkTask):
             color = self._panel_ok if valid else self._panel_text
             y = self._panel_line(panel, f"{short}: {status}", y, 0.47, color)
 
+        y += 2
+        y = self._panel_line(panel, "PUBLIC TACTILE MEMORY VECTOR", y, 0.45, self._panel_accent, 1)
+        y = self._panel_line(panel, "field                         A ref       B left      C right", y, 0.34, self._panel_text)
+        for label, feature, unit, accent in self._memory_vector_rows():
+            values = [self._memory_value(evidence, name, feature) for name in ("reference", "candidate_left", "candidate_right")]
+            formatted = "  ".join(self._format_memory_value(value, unit) for value in values)
+            y = self._panel_line(panel, f"{label:<27} {formatted}", y, 0.33, accent)
+
         selection = memory.get("selection", {})
         if selection.get("status") == "selected":
-            y += 8
+            y += 4
             static_scores = selection["static_scores"]
             dynamic_scores = selection["dynamic_scores"]
             fused_scores = selection["fused_scores"]
@@ -172,24 +180,24 @@ class Task(BenchmarkTask):
                 panel,
                 f"static  L {static_scores['candidate_left']:.3f}  R {static_scores['candidate_right']:.3f}",
                 y,
-                0.43,
+                0.38,
                 self._panel_text,
             )
             y = self._panel_line(
                 panel,
                 f"dynamic L {dynamic_scores['candidate_left']:.3f}  R {dynamic_scores['candidate_right']:.3f}",
                 y,
-                0.43,
+                0.38,
                 self._panel_text,
             )
             y = self._panel_line(
                 panel,
                 f"fused   L {fused_scores['candidate_left']:.3f}  R {fused_scores['candidate_right']:.3f}",
                 y,
-                0.43,
+                0.38,
                 self._panel_text,
             )
-            y = self._panel_line(panel, f"margin: {selection['margin']:.3f}", y, 0.43, self._panel_text)
+            y = self._panel_line(panel, f"margin: {selection['margin']:.3f}", y, 0.38, self._panel_text)
             y = self._panel_line(
                 panel,
                 f"SELECTED: {selection['selected_candidate']}",
@@ -201,13 +209,42 @@ class Task(BenchmarkTask):
 
         if oracle_audit is not None:
             audit = oracle_audit
-            y += 8
-            y = self._panel_line(panel, "ORACLE AUDIT (revealed now)", y, 0.47, self._panel_accent, 1)
-            y = self._panel_line(panel, f"match: {audit['oracle_match_candidate']}", y, 0.43, self._panel_text)
+            y += 4
+            y = self._panel_line(panel, "ORACLE AUDIT (revealed now)", y, 0.42, self._panel_accent, 1)
+            y = self._panel_line(panel, f"match: {audit['oracle_match_candidate']}", y, 0.38, self._panel_text)
             audit_color = self._panel_ok if audit["selection_correct"] else self._panel_bad
             status = "CORRECT" if audit["selection_correct"] else "INCORRECT"
-            self._panel_line(panel, status, y, 0.62, audit_color, 2)
+            self._panel_line(panel, status, y, 0.52, audit_color, 2)
         return panel
+
+    @staticmethod
+    def _memory_vector_rows():
+        return (
+            ("S depth L [mm]", "left_depth_mm", "mm", Task._panel_text),
+            ("S depth R [mm]", "right_depth_mm", "mm", Task._panel_text),
+            ("S marker disp L [px]", "left_marker_displacement_px", "px", Task._panel_text),
+            ("S marker disp R [px]", "right_marker_displacement_px", "px", Task._panel_text),
+            ("S marker coherence L", "left_marker_coherence", "unit", Task._panel_text),
+            ("S marker coherence R", "right_marker_coherence", "unit", Task._panel_text),
+            ("D depth L [mm]", "left_lift_depth_delta_mm", "mm", Task._panel_ok),
+            ("D depth R [mm]", "right_lift_depth_delta_mm", "mm", Task._panel_ok),
+            ("D marker disp L [px]", "left_lift_marker_displacement_delta_px", "px", Task._panel_ok),
+            ("D marker disp R [px]", "right_lift_marker_displacement_delta_px", "px", Task._panel_ok),
+            ("D marker coherence L", "left_lift_marker_coherence_delta", "unit", Task._panel_ok),
+            ("D marker coherence R", "right_lift_marker_coherence_delta", "unit", Task._panel_ok),
+        )
+
+    @staticmethod
+    def _memory_value(evidence: dict[str, Any], object_name: str, feature: str) -> float | None:
+        value = evidence.get(object_name, {}).get("features", {}).get(feature)
+        return float(value) if isinstance(value, (int, float)) else None
+
+    @staticmethod
+    def _format_memory_value(value: float | None, unit: str) -> str:
+        if value is None:
+            return "-          "
+        precision = 4 if unit == "unit" else 3
+        return f"{value:>9.{precision}f}"
 
     @staticmethod
     def _panel_line(

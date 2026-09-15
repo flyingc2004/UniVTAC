@@ -41,6 +41,7 @@ FEATURES = (
 )
 STATIC_FEATURE_NAMES = tuple(feature[3] for feature in FEATURES[:6])
 DYNAMIC_FEATURE_NAMES = tuple(feature[3] for feature in FEATURES[6:])
+VECTOR_SCHEMA_VERSION = "tactile_memory_vector.v1"
 
 
 def _quality(probe: dict[str, Any] | None) -> dict[str, Any]:
@@ -67,6 +68,15 @@ def _feature_map(probe: dict[str, Any]) -> dict[str, float]:
             raise ValueError(f"non-finite tactile feature: {name}")
         values[name] = value
     return values
+
+
+def _memory_vector(features: dict[str, float]) -> dict[str, Any]:
+    """Expose the exact public values used as the demo working memory."""
+    return {
+        "schema_version": VECTOR_SCHEMA_VERSION,
+        "static_preload": {name: float(features[name]) for name in STATIC_FEATURE_NAMES},
+        "dynamic_lift_minus_preload": {name: float(features[name]) for name in DYNAMIC_FEATURE_NAMES},
+    }
 
 
 def _symmetric_distance(
@@ -105,12 +115,17 @@ def build_demo_memory(probes: dict[str, dict[str, Any]], phase: str) -> dict[str
         probe = probes.get(name)
         if quality[name]["valid"]:
             try:
-                evidence[name] = {"quality": quality[name], "features": _feature_map(probe)}
+                features = _feature_map(probe)
+                evidence[name] = {
+                    "quality": quality[name],
+                    "features": features,
+                    "memory_vector": _memory_vector(features),
+                }
             except (KeyError, TypeError, ValueError) as error:
                 quality[name] = {**quality[name], "valid": False, "reason": str(error)}
-                evidence[name] = {"quality": quality[name], "features": {}}
+                evidence[name] = {"quality": quality[name], "features": {}, "memory_vector": {}}
         else:
-            evidence[name] = {"quality": quality[name], "features": {}}
+            evidence[name] = {"quality": quality[name], "features": {}, "memory_vector": {}}
 
     memory: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

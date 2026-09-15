@@ -45,6 +45,10 @@ def test_public_memory_selector_picks_nearest_candidate():
     assert selection["selected_candidate"] == "candidate_right"
     assert selection["fused_scores"]["candidate_right"] < selection["fused_scores"]["candidate_left"]
     assert selection["margin"] > 0.0
+    vector = memory["evidence"]["reference"]["memory_vector"]
+    assert vector["schema_version"] == "tactile_memory_vector.v1"
+    assert vector["static_preload"]["left_depth_mm"] == 2.0
+    assert vector["dynamic_lift_minus_preload"]["right_lift_marker_displacement_delta_px"] == 3.3
 
 
 def test_public_memory_selector_refuses_invalid_probe():
