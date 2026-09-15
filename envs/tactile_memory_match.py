@@ -55,6 +55,9 @@ class TaskCfg(BaseTaskCfg):
     distractor_class_key: str = "random"
     probe_capture_steps: int = 6
     probe_min_bilateral_ratio: float = 0.8
+    # Engineering-only switch for CaP-X Easy-GT integration.  The benchmark
+    # default remains pose-free and exposes only the controlled public probe.
+    capx_easy_gt_enabled: bool = False
 
 
 class Task(BaseTask):
@@ -857,21 +860,62 @@ class Task(BaseTask):
         return True
 
     def get_public_pose_map(self) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
-        """No live actor poses are part of the composable-probe benchmark."""
-        return {}
+        """Return reset anchors only for an explicitly enabled Easy-GT run."""
+        if not bool(getattr(self.cfg, "capx_easy_gt_enabled", False)):
+            return {}
+        if not hasattr(self, "reference_start_pose") or not hasattr(self, "candidate_start_poses"):
+            return {}
+
+        object_extent = np.array([0.04, 0.04, float(self.can_length)], dtype=np.float32)
+        slot_extent = np.array([0.09, 0.09, 0.02], dtype=np.float32)
+        anchors = {
+            "reference_object": self.reference_start_pose,
+            "candidate_left": self.candidate_start_poses["candidate_left"],
+            "candidate_right": self.candidate_start_poses["candidate_right"],
+            "match_slot": self.match_slot_pose,
+        }
+        return {
+            name: (
+                np.asarray(pose.p, dtype=np.float32).copy(),
+                np.asarray(pose.q, dtype=np.float32).copy(),
+                (slot_extent if name == "match_slot" else object_extent).copy(),
+            )
+            for name, pose in anchors.items()
+        }
 
     def get_public_regions(self) -> dict:
         """Legacy region service is intentionally disabled for this benchmark."""
         return {}
 
     def get_public_grasp_actor(self, object_name: str):
-        raise RuntimeError("tactile_memory_match exposes run_public_probe(), not live actors")
+        if not bool(getattr(self.cfg, "capx_easy_gt_enabled", False)):
+            raise RuntimeError("tactile_memory_match exposes run_public_probe(), not live actors")
+        public_name = self._resolve_public_object_name(object_name)
+        if public_name == "reference_object":
+            return self.reference_object
+        if public_name in self.public_candidate_actors:
+            return self.public_candidate_actors[public_name]
+        return None
 
     def get_public_grasp_pose(self, object_name: str, *, grasp_height: float = 0.04):
-        raise RuntimeError("tactile_memory_match exposes run_public_probe(), not grasp poses")
+        if not bool(getattr(self.cfg, "capx_easy_gt_enabled", False)):
+            raise RuntimeError("tactile_memory_match exposes run_public_probe(), not grasp poses")
+        public_name = self._resolve_public_object_name(object_name)
+        if public_name == "reference_object":
+            anchor_pose = self.reference_start_pose
+        elif public_name in self.candidate_start_poses:
+            anchor_pose = self.candidate_start_poses[public_name]
+        else:
+            raise KeyError(f"unknown Easy-GT grasp object {object_name!r}")
+        grasp_pose = self._lift_can_style_grasp_pose_from_pose(anchor_pose)
+        return (
+            np.asarray(grasp_pose.p, dtype=np.float32).copy(),
+            np.asarray(grasp_pose.q, dtype=np.float32).copy(),
+        )
 
     def make_public_grasp_pose(self, object_name: str, actor: Actor | None = None, *, grasp_height: float = 0.04):
-        raise RuntimeError("tactile_memory_match exposes run_public_probe(), not grasp poses")
+        position, quaternion = self.get_public_grasp_pose(object_name, grasp_height=grasp_height)
+        return Pose(position.tolist(), quaternion.tolist())
 
     def _resolve_public_object_name(self, object_name: str) -> str | None:
         key = str(object_name).strip().lower().replace(" ", "_")
