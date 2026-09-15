@@ -1111,12 +1111,17 @@ class Task(BaseTask):
     def _save_metadata(self):
         self._sync_metadata()
         raw_path = self._save_public_probe_raw()
+        tactile_probes = getattr(
+            self,
+            "tactile_probes",
+            {"reference": {}, "candidate_left": {}, "candidate_right": {}},
+        )
         public_record = {
             "schema_version": "tactile_memory_match_public_episode.v3",
             "seed": int(self.cfg.seed),
             "task": "tactile_memory_match",
             "probe_spec": self.get_public_probe_spec(),
-            "probes": self.tactile_probes,
+            "probes": tactile_probes,
             "raw_probe_path": str(raw_path.relative_to(self.save_root)),
         }
         self._update_seed_json(self.metadata_path, public_record)
@@ -1133,7 +1138,11 @@ class Task(BaseTask):
         raw_dir.mkdir(parents=True, exist_ok=True)
         raw_path = raw_dir / f"{self.cfg.seed}.npz"
         arrays: dict[str, np.ndarray] = {}
-        for object_key, segments in self._probe_raw_records.items():
+        # ``clean_cache(result='error')`` can be reached during a reset error,
+        # before episode state initializes probe buffers.  Save an empty NPZ so
+        # the original reset failure remains visible instead of being masked.
+        probe_records = getattr(self, "_probe_raw_records", {})
+        for object_key, segments in probe_records.items():
             for segment_name, frames in segments.items():
                 prefix = f"{object_key}__{segment_name}"
                 arrays[f"{prefix}__step"] = np.asarray([frame["step"] for frame in frames], dtype=np.int64)
