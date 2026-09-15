@@ -913,6 +913,65 @@ class Task(BaseTask):
             np.asarray(grasp_pose.q, dtype=np.float32).copy(),
         )
 
+    def approach_grasped_actor(
+        self,
+        *,
+        object_name: str,
+        position_offset=None,
+        pre_dis: float = 0.04,
+        dis: float = 0.0,
+        grasp_height: float = 0.04,
+        time_dilation_factor: float | None = None,
+    ) -> dict:
+        """Execute the expert side-grasp approach for the Easy-GT adapter.
+
+        The generated program receives a reset anchor through
+        ``sample_grasp_pose``. This private adapter hook resolves the allowed
+        actor again at execution time, because an earlier probe can shift or
+        rotate the can before its final regrasp. It never returns a live actor
+        pose or physical class to the program.
+        """
+        if not bool(getattr(self.cfg, "capx_easy_gt_enabled", False)):
+            return {"ok": False, "message": "Easy-GT grasp bridge is disabled"}
+
+        public_name = self._resolve_public_object_name(object_name)
+        if public_name is None:
+            return {"ok": False, "message": f"unknown public grasp object {object_name!r}"}
+
+        offset = np.asarray(
+            [0.0, 0.0, 0.0] if position_offset is None else position_offset,
+            dtype=np.float64,
+        ).reshape(3)
+        if not np.all(np.isfinite(offset)) or float(np.linalg.norm(offset)) > 1e-6:
+            return {
+                "ok": False,
+                "message": "expert-aligned public grasp requires the sampled anchor without an offset",
+            }
+
+        try:
+            actor = self.get_public_grasp_actor(public_name)
+        except Exception as exc:
+            return {"ok": False, "message": f"could not resolve public grasp actor: {exc!r}"}
+        if actor is None:
+            return {"ok": False, "message": f"public grasp actor {public_name!r} is unavailable"}
+
+        self.active_public_name = public_name
+        self.task_phase = f"{public_name}_capx_grasp_approach"
+        ok = self._move_to_actor_grasp(
+            public_name,
+            actor,
+            tag=f"{public_name}_capx_expert_side_grasp",
+        )
+        self._sync_metadata()
+        return {
+            "ok": bool(ok),
+            "message": (
+                "expert-aligned live side-grasp approach executed"
+                if ok
+                else "expert-aligned live side-grasp approach failed"
+            ),
+        }
+
     def make_public_grasp_pose(self, object_name: str, actor: Actor | None = None, *, grasp_height: float = 0.04):
         position, quaternion = self.get_public_grasp_pose(object_name, grasp_height=grasp_height)
         return Pose(position.tolist(), quaternion.tolist())
