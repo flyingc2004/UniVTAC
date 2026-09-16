@@ -58,6 +58,9 @@ class TaskCfg(BaseTaskCfg):
     # Engineering-only switch for CaP-X Easy-GT integration.  The benchmark
     # default remains pose-free and exposes only the controlled public probe.
     capx_easy_gt_enabled: bool = False
+    # Visual-only candidate-area occluder. Benchmark configurations keep this
+    # disabled; the fixed teaching demo enables it through YAML.
+    occlusion_enabled: bool = False
 
 
 class Task(BaseTask):
@@ -121,6 +124,7 @@ class Task(BaseTask):
             raise ValueError("probe_capture_steps must be positive")
         if not 0.0 < cfg.probe_min_bilateral_ratio <= 1.0:
             raise ValueError("probe_min_bilateral_ratio must be in (0, 1]")
+        self.occlusion_enabled = bool(cfg.occlusion_enabled)
         cfg.sim.physics_material.dynamic_friction = 1.5
         cfg.sim.physics_material.static_friction = 1.5
         cfg.uipc_sim.contact.default_friction_ratio = 2.5
