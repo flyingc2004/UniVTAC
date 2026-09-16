@@ -322,6 +322,17 @@ class Task(BaseTask):
             self.occlusion_walls = []
             return
 
+        # ``VisualCuboid`` initializes an IsaacSim runtime wrapper and tries
+        # to register with PhysX. UIPC owns the physics scene here, so create
+        # plain USD meshes instead: they render and occlude cameras, but have
+        # no collision or physics state.
+        import omni.usd
+        from pxr import Gf, UsdGeom
+
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            raise RuntimeError("Cannot create visual occlusion without an active USD stage")
+
         center = np.asarray(self.occlusion_center_xy, dtype=np.float64)
         height = float(self.occlusion_wall_height)
         thickness = float(self.occlusion_wall_thickness)
@@ -370,16 +381,13 @@ class Task(BaseTask):
 
         self.occlusion_walls = []
         for name, position, scale in wall_specs:
-            wall = VisualCuboid(
-                prim_path=f"/World/envs/env_0/{name}",
-                name=name,
-                position=np.asarray(position, dtype=np.float32),
-                orientation=np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-                scale=np.asarray(scale, dtype=np.float32),
-                size=1.0,
-                color=color,
-            )
-            self.occlusion_walls.append(wall)
+            wall = UsdGeom.Cube.Define(stage, f"/World/envs/env_0/{name}")
+            wall.CreateSizeAttr(1.0)
+            wall.AddTranslateOp().Set(Gf.Vec3d(*np.asarray(position, dtype=np.float64)))
+            wall.AddScaleOp().Set(Gf.Vec3f(*np.asarray(scale, dtype=np.float32)))
+            wall.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+            wall.CreateDisplayOpacityAttr([float(self.occlusion_opacity)])
+            self.occlusion_walls.append(wall.GetPath().pathString)
 
     def pre_move(self):
         self.task_phase = "premove_reference"
