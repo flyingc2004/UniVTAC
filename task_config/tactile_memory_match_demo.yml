@@ -30,6 +30,9 @@ task_cfg_overrides:
   reference_class_key: light_smooth_soft
   distractor_class_key: light_smooth_rigid
   probe_min_bilateral_ratio: 0.8
+  # Demo-only visual occluder around the candidate area. It has no collision,
+  # so the official expert remains the same controlled probe and transport.
+  occlusion_enabled: true
 
 observations:
   camera: ['rgb', 'depth']
