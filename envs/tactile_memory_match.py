@@ -381,11 +381,14 @@ class Task(BaseTask):
 
         self.occlusion_walls = []
         for name, position, scale in wall_specs:
+            position_values = tuple(float(value) for value in position)
+            scale_values = tuple(float(value) for value in scale)
+            color_values = tuple(float(value) for value in color)
             wall = UsdGeom.Cube.Define(stage, f"/World/envs/env_0/{name}")
             wall.CreateSizeAttr(1.0)
-            wall.AddTranslateOp().Set(Gf.Vec3d(*np.asarray(position, dtype=np.float64)))
-            wall.AddScaleOp().Set(Gf.Vec3f(*np.asarray(scale, dtype=np.float32)))
-            wall.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+            wall.AddTranslateOp().Set(Gf.Vec3d(*position_values))
+            wall.AddScaleOp().Set(Gf.Vec3f(*scale_values))
+            wall.CreateDisplayColorAttr([Gf.Vec3f(*color_values)])
             wall.CreateDisplayOpacityAttr([float(self.occlusion_opacity)])
             self.occlusion_walls.append(wall.GetPath().pathString)
 
