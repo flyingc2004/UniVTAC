@@ -33,13 +33,18 @@ ORDERED_CLASS_PAIRS = tuple(
     for distractor_key in CLASS_KEYS
     if reference_key != distractor_key
 )
-TACTILE_PROBE_SCHEMA_VERSION = "tactile_probe.v3"
+TACTILE_PROBE_SCHEMA_VERSION = "tactile_probe.v4"
 PUBLIC_PROBE_RESPONSE_SCHEMA_VERSION = "public_probe_response.v1"
-PUBLIC_PROBE_PROTOCOL_ID = "symmetric_side_grasp_preload_lift_hold_release.v3"
+PUBLIC_PROBE_PROTOCOL_ID = "symmetric_side_grasp_preload_lift_hold_release.v4"
 TACTILE_PROBE_FIELDS = (
     "depth_mm",
     "marker_displacement_px",
     "marker_coherence",
+    "marker_dx_px",
+    "marker_dy_px",
+    "marker_row_gradient_px",
+    "marker_col_gradient_px",
+    "marker_anisotropy_ratio",
 )
 
 
@@ -510,7 +515,7 @@ class Task(BaseTask):
     def get_public_probe_spec(self) -> dict:
         """Return the fixed, label-free measurement protocol for every object."""
         return {
-            "schema_version": "public_probe_spec.v1",
+            "schema_version": "public_probe_spec.v2",
             "protocol_id": PUBLIC_PROBE_PROTOCOL_ID,
             "side_grasp": True,
             "adaptive_close": True,
@@ -522,6 +527,19 @@ class Task(BaseTask):
             "lower_settle_steps": int(self.weight_probe_return_steps),
             "min_bilateral_contact_ratio": float(self.cfg.probe_min_bilateral_ratio),
             "release_then_clearance": True,
+            # These are field/time contracts, not object labels or a matching rule.
+            "static_contact_observables": [
+                "preload.left/right.depth_mm",
+                "preload.left/right.marker_dx_px",
+                "preload.left/right.marker_dy_px",
+                "preload.left/right.marker_row_gradient_px",
+                "preload.left/right.marker_col_gradient_px",
+                "preload.left/right.marker_anisotropy_ratio",
+            ],
+            "dynamic_load_observables": [
+                "lift_minus_preload.left/right.marker_displacement_px",
+                "lift_minus_preload.left/right.marker_coherence",
+            ],
         }
 
     def capture_public_probe_frame(self) -> dict:
@@ -536,7 +554,7 @@ class Task(BaseTask):
         return self._read_tactile_measurement(include_raw=False)
 
     def aggregate_public_probe_window(self, frames: list[dict]) -> dict:
-        """Aggregate public probe frames with the expert's v3 statistics."""
+        """Aggregate public probe frames with the expert's v4 statistics."""
         return self._aggregate_tactile_window(frames)
 
     def build_public_probe_record(
@@ -554,7 +572,7 @@ class Task(BaseTask):
         release_ok: bool,
         clearance_ok: bool,
     ) -> dict:
-        """Build ``tactile_probe.v3`` for an externally executed public probe.
+        """Build ``tactile_probe.v4`` for an externally executed public probe.
 
         This is a schema/measurement utility only.  It neither stores a task
         memory nor selects a candidate, so downstream agents remain fully
@@ -1158,7 +1176,13 @@ class Task(BaseTask):
 
     def _read_tactile_measurement(self, *, include_raw: bool = False) -> dict:
         try:
-            tactile_obs = self._tactile_manager.get_observations(["depth", "marker"])
+            observation_types = ["depth", "marker"]
+            if include_raw:
+                # Save attachment poses alongside raw images so an offline
+                # analysis can map both fingers into one calibrated contact
+                # frame.  These are sensor poses, never object/actor poses.
+                observation_types.append("pose")
+            tactile_obs = self._tactile_manager.get_observations(observation_types)
         except Exception:
             tactile_obs = {}
         left = self._tactile_hand_measurement(tactile_obs.get("left_tactile", {}))
@@ -1175,7 +1199,7 @@ class Task(BaseTask):
             measurement["raw"] = {}
             for hand, source in (("left", "left_tactile"), ("right", "right_tactile")):
                 hand_obs = tactile_obs.get(source, {})
-                for field in ("depth", "marker"):
+                for field in ("depth", "marker", "pose"):
                     value = self._as_numpy(hand_obs.get(field))
                     if value is not None:
                         measurement["raw"][f"{hand}_{field}"] = np.asarray(value).copy()
@@ -1196,15 +1220,34 @@ class Task(BaseTask):
 
         marker_displacement_px = 0.0
         marker_coherence = 0.0
+        marker_dx_px = 0.0
+        marker_dy_px = 0.0
+        marker_row_gradient_px = 0.0
+        marker_col_gradient_px = 0.0
+        marker_anisotropy_ratio = 1.0
         if marker is not None and marker.ndim >= 3 and marker.shape[0] >= 2 and marker.shape[-1] >= 2:
-            flow = np.asarray(marker[-1, ..., :2] - marker[0, ..., :2], dtype=np.float64).reshape(-1, 2)
+            flow_grid = np.asarray(marker[-1, ..., :2] - marker[0, ..., :2], dtype=np.float64)
+            flow = flow_grid.reshape(-1, 2)
             flow = flow[np.isfinite(flow).all(axis=1)]
             if flow.size:
                 magnitudes = np.linalg.norm(flow, axis=1)
                 mean_magnitude = float(np.mean(magnitudes))
                 marker_displacement_px = mean_magnitude
+                mean_flow = np.mean(flow, axis=0)
+                marker_dx_px = float(mean_flow[0])
+                marker_dy_px = float(mean_flow[1])
                 if mean_magnitude > 1e-8:
                     marker_coherence = float(np.linalg.norm(np.mean(flow, axis=0)) / mean_magnitude)
+            # The 64-marker GSmini layout is a row-major 8x8 grid.  These
+            # spatial gradients expose local contact deformation without
+            # turning the task into a task-side classifier.
+            if flow_grid.shape[-2:] == (64, 2) and np.isfinite(flow_grid).all():
+                grid = flow_grid.reshape(8, 8, 2)
+                marker_row_gradient_px = float(np.sqrt(np.mean(np.square(np.diff(grid, axis=0)))))
+                marker_col_gradient_px = float(np.sqrt(np.mean(np.square(np.diff(grid, axis=1)))))
+                marker_anisotropy_ratio = float(
+                    marker_row_gradient_px / max(marker_col_gradient_px, 1e-12)
+                )
 
         return {
             "contact": bool(depth_mm >= 0.5 and contact_area > 0.001),
@@ -1212,6 +1255,11 @@ class Task(BaseTask):
             "contact_area": float(contact_area),
             "marker_displacement_px": float(marker_displacement_px),
             "marker_coherence": float(np.clip(marker_coherence, 0.0, 1.0)),
+            "marker_dx_px": float(marker_dx_px),
+            "marker_dy_px": float(marker_dy_px),
+            "marker_row_gradient_px": float(marker_row_gradient_px),
+            "marker_col_gradient_px": float(marker_col_gradient_px),
+            "marker_anisotropy_ratio": float(marker_anisotropy_ratio),
         }
 
     @staticmethod
@@ -1395,7 +1443,7 @@ class Task(BaseTask):
             {"reference": {}, "candidate_left": {}, "candidate_right": {}},
         )
         public_record = {
-            "schema_version": "tactile_memory_match_public_episode.v3",
+            "schema_version": "tactile_memory_match_public_episode.v4",
             "seed": int(self.cfg.seed),
             "task": "tactile_memory_match",
             "probe_spec": self.get_public_probe_spec(),
@@ -1404,7 +1452,7 @@ class Task(BaseTask):
         }
         self._update_seed_json(self.metadata_path, public_record)
         private_record = {
-            "schema_version": "tactile_memory_match_private_episode.v3",
+            "schema_version": "tactile_memory_match_private_episode.v4",
             "seed": int(self.cfg.seed),
             **self.metadata,
         }
@@ -1433,7 +1481,14 @@ class Task(BaseTask):
                 arrays[f"{prefix}__atom_tag"] = np.asarray(
                     [frame["control_frame"]["atom_tag"] for frame in frames], dtype="U96"
                 )
-                for raw_name in ("left_depth", "right_depth", "left_marker", "right_marker"):
+                for raw_name in (
+                    "left_depth",
+                    "right_depth",
+                    "left_marker",
+                    "right_marker",
+                    "left_pose",
+                    "right_pose",
+                ):
                     values = [frame.get("raw", {}).get(raw_name) for frame in frames]
                     values = [value for value in values if value is not None]
                     if values:
