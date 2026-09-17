@@ -1,0 +1,39 @@
+# Pilot composable-slot calibration: 24 fixed ordered pairs x 4 seeds = 96.
+# Run this through tools/run_composable_slot_pilot_96.sh so every process uses
+# the compact three-actor scene.  The shell runner supplies the pair-specific
+# class overrides and isolated output directory.
+save_dir: ./data
+
+decimation: 1
+save_frequency: 0
+video_frequency: 0
+render_frequency: 0
+preserve_raw_cache: false
+save_hdf5: false
+headless: true
+livestream: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 4
+start_seed: 3000
+max_seed: 3003
+
+sensor_type: gsmini
+reset_time_limit: 900
+step_lim: 500
+max_save_frames: 5000
+live_preview_enabled: false
+
+task_cfg_overrides:
+  # Safe direct-run defaults; the pilot launcher replaces these per pair.
+  reference_class_key: light_smooth_rigid
+  distractor_class_key: heavy_smooth_rigid
+  compact_fixed_pair_scene: true
+  probe_min_bilateral_ratio: 0.8
+  calibration_probe_only: true
+  record_tactile_timeline: false
+
+observations:
+  tactile: ['marker', 'depth']
