@@ -45,6 +45,24 @@ parser.add_argument(
     type=str,
     default=None,
 )
+parser.add_argument(
+    "--seed_stride",
+    type=int,
+    default=1,
+    help="Advance seeds by this stride after every episode.",
+)
+parser.add_argument(
+    "--task_cfg_override",
+    action="append",
+    default=[],
+    help="Repeatable key=value YAML override applied to TaskCfg before construction.",
+)
+parser.add_argument(
+    "--run_name",
+    type=str,
+    default=None,
+    help="Optional isolated subdirectory below this task configuration's output root.",
+)
 
 args_cli = parser.parse_args()
 if args_cli.gpu is not None:
@@ -87,6 +105,15 @@ task_config, task_config_file = get_config(
     type='yaml'
 )
 
+for raw_override in args_cli.task_cfg_override:
+    if "=" not in raw_override:
+        parser.error("--task_cfg_override must use key=value syntax")
+    key, value = raw_override.split("=", 1)
+    key = key.strip()
+    if not key:
+        parser.error("--task_cfg_override key cannot be empty")
+    task_config.setdefault("task_cfg_overrides", {})[key] = yaml.safe_load(value)
+
 args_cli.headless = task_config.get("headless", getattr(args_cli, "headless", True))
 args_cli.livestream = task_config.get("livestream", getattr(args_cli, "livestream", 0))
 
@@ -111,7 +138,17 @@ def log(msg):
         f.write(msg + '\n')
     print(msg)
 
-def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed, save_hdf5: bool = True):
+def run(
+    task: 'BaseTask',
+    episode_num,
+    use_seed,
+    start_seed,
+    max_seed,
+    save_hdf5: bool = True,
+    seed_stride: int = 1,
+):
+    if seed_stride < 1:
+        raise ValueError("seed_stride must be positive")
     suc_num, seed = 0, 0
     attempted_num = 0
     suc_map_path = task.save_root / 'suc_map.txt'
@@ -172,7 +209,7 @@ def run(task: 'BaseTask', episode_num, use_seed, start_seed, max_seed, save_hdf5
         with open(suc_map_path, 'w') as f:
             f.write(' '.join([s for s in suc_map]))
         
-        seed += 1
+        seed += seed_stride
     
     success_rate = (suc_num / attempted_num * 100.0) if attempted_num else 0.0
     log(f'Complete collection, success rate: {suc_num}/{attempted_num} ({success_rate:.2f}%)')
@@ -211,6 +248,8 @@ def main():
         setattr(env_cfg, key, value)
     env_cfg.tactile_sensor_type = task_config.get('sensor_type', 'gsmini')
     env_cfg.save_dir = Path(task_config.get("save_dir", "./data")) / task_file_name / task_config_file.stem
+    if args_cli.run_name:
+        env_cfg.save_dir = env_cfg.save_dir / args_cli.run_name
     env_cfg.decimation = task_config.get("decimation", env_cfg.decimation)
     env_cfg.save_frequency = task_config.get("save_frequency", env_cfg.save_frequency)
     env_cfg.video_frequency = task_config.get("video_frequency", env_cfg.video_frequency)
@@ -269,6 +308,7 @@ def main():
         start_seed=start_seed,
         max_seed=max_seed,
         save_hdf5=get_bool_config(task_config, "save_hdf5", True),
+        seed_stride=args_cli.seed_stride,
     )
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 save_dir: ./data
 
 decimation: 1
-save_frequency: 4
+save_frequency: 0
 video_frequency: 0
 render_frequency: 0
 preserve_raw_cache: false
@@ -28,6 +28,8 @@ live_preview_enabled: false
 task_cfg_overrides:
   identity_pair_schedule: balanced_ordered_pairs
   probe_min_bilateral_ratio: 0.8
+  calibration_probe_only: true
+  record_tactile_timeline: false
 
 observations:
   tactile: ['marker', 'depth']

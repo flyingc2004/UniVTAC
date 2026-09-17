@@ -1,0 +1,43 @@
+# Single-seed engineering demo only. This is not a balanced benchmark split.
+# The reference/match are heavy_rough_rigid; the same-mesh distractor is
+# light_smooth_rigid, so the hidden choice differs in weight and roughness.
+save_dir: ./data
+
+decimation: 1
+save_frequency: 4
+video_frequency: 5
+render_frequency: 0
+preserve_raw_cache: false
+save_hdf5: false
+headless: true
+livestream: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 1
+start_seed: 4002
+max_seed: 4002
+
+sensor_type: gsmini
+reset_time_limit: 900
+step_lim: 500
+max_save_frames: 5000
+live_preview_enabled: true
+live_preview_path: ./data/tactile_memory_match/tactile_memory_match_composable_capx_demo/latest_preview.jpg
+live_preview_stride: 5
+live_preview_jpeg_quality: 85
+
+task_cfg_overrides:
+  reference_class_key: heavy_rough_rigid
+  distractor_class_key: light_smooth_rigid
+  probe_min_bilateral_ratio: 0.8
+  probe_close_target_force: 0.82
+  probe_close_max_steps: 120
+  capx_easy_gt_enabled: true
+  occlusion_enabled: false
+
+observations:
+  camera: ['rgb', 'depth']
+  tactile: ['rgb_marker', 'marker', 'depth']
+  embodiment: ['joint', 'ee']

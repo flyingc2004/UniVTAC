@@ -55,6 +55,17 @@ class TaskCfg(BaseTaskCfg):
     distractor_class_key: str = "random"
     probe_capture_steps: int = 6
     probe_min_bilateral_ratio: float = 0.8
+    probe_close_target_force: float = 0.82
+    probe_close_max_steps: int = 120
+    # Calibration runs only require three valid, protocol-aligned probes.
+    # Full expert transport remains the default physical-task behavior.
+    calibration_probe_only: bool = False
+    # Timeline logging duplicates probe captures and is unnecessary at scale.
+    record_tactile_timeline: bool = True
+    # Fixed-pair calibration can instantiate only the three objects required
+    # for one ordered pair, rather than keeping every soft/rigid variant in
+    # the UIPC world. It requires explicit non-random class keys.
+    compact_fixed_pair_scene: bool = False
     # Engineering-only switch for CaP-X Easy-GT integration.  The benchmark
     # default remains pose-free and exposes only the controlled public probe.
     capx_easy_gt_enabled: bool = False
@@ -139,6 +150,36 @@ class Task(BaseTask):
         )
         self._create_occlusion_box()
 
+        if self.cfg.compact_fixed_pair_scene:
+            reference_key, distractor_key = self._fixed_pair_keys()
+            reference_cfg = TACTILE_CLASSES[reference_key]
+            distractor_cfg = TACTILE_CLASSES[distractor_key]
+            self._compact_reference_actor = self._actor_manager.add_from_usd_file(
+                name="reference_active",
+                asset_path=str(reference_cfg["asset"]),
+                pose=self._stash_pose(0),
+                constitution_cfg=self._constitution_for_variant(reference_cfg),
+                density=float(reference_cfg["density"]),
+                friction_ratio=float(reference_cfg["friction_ratio"]),
+            )
+            self._compact_match_actor = self._actor_manager.add_from_usd_file(
+                name="match_active",
+                asset_path=str(reference_cfg["asset"]),
+                pose=self._stash_pose(1),
+                constitution_cfg=self._constitution_for_variant(reference_cfg),
+                density=float(reference_cfg["density"]),
+                friction_ratio=float(reference_cfg["friction_ratio"]),
+            )
+            self._compact_distractor_actor = self._actor_manager.add_from_usd_file(
+                name="distractor_active",
+                asset_path=str(distractor_cfg["asset"]),
+                pose=self._stash_pose(2),
+                constitution_cfg=self._constitution_for_variant(distractor_cfg),
+                density=float(distractor_cfg["density"]),
+                friction_ratio=float(distractor_cfg["friction_ratio"]),
+            )
+            return
+
         self.reference_actors: dict[str, Actor] = {}
         self.candidate_actors: dict[str, Actor] = {}
         for idx, (class_key, class_cfg) in enumerate(TACTILE_CLASSES.items()):
@@ -161,11 +202,6 @@ class Task(BaseTask):
             )
 
     def _reset_actors(self):
-        for idx, actor in enumerate(self.reference_actors.values()):
-            actor.set_pose(self._stash_pose(idx))
-        for idx, actor in enumerate(self.candidate_actors.values()):
-            actor.set_pose(self._stash_pose(idx + len(TACTILE_CLASSES)))
-
         self.reference_class_key, self.distractor_class_key = self._choose_identity_pair()
         self.reference_class = TACTILE_CLASSES[self.reference_class_key]
         self.distractor_class = TACTILE_CLASSES[self.distractor_class_key]
@@ -173,9 +209,21 @@ class Task(BaseTask):
         self.match_candidate_public_name = "candidate_left" if self.match_on_left else "candidate_right"
         self.distractor_candidate_public_name = "candidate_right" if self.match_on_left else "candidate_left"
 
-        self.reference_object = self.reference_actors[self.reference_class_key]
-        self.match_actor = self.candidate_actors[self.reference_class_key]
-        self.distractor_actor = self.candidate_actors[self.distractor_class_key]
+        if self.cfg.compact_fixed_pair_scene:
+            self._compact_reference_actor.set_pose(self._stash_pose(0))
+            self._compact_match_actor.set_pose(self._stash_pose(1))
+            self._compact_distractor_actor.set_pose(self._stash_pose(2))
+            self.reference_object = self._compact_reference_actor
+            self.match_actor = self._compact_match_actor
+            self.distractor_actor = self._compact_distractor_actor
+        else:
+            for idx, actor in enumerate(self.reference_actors.values()):
+                actor.set_pose(self._stash_pose(idx))
+            for idx, actor in enumerate(self.candidate_actors.values()):
+                actor.set_pose(self._stash_pose(idx + len(TACTILE_CLASSES)))
+            self.reference_object = self.reference_actors[self.reference_class_key]
+            self.match_actor = self.candidate_actors[self.reference_class_key]
+            self.distractor_actor = self.candidate_actors[self.distractor_class_key]
         self.public_candidate_actors = {
             self.match_candidate_public_name: self.match_actor,
             self.distractor_candidate_public_name: self.distractor_actor,
@@ -213,6 +261,8 @@ class Task(BaseTask):
 
     def _choose_identity_pair(self) -> tuple[str, str]:
         """Choose the hidden reference/distractor pair without exposing it to agents."""
+        if self.cfg.compact_fixed_pair_scene:
+            return self._fixed_pair_keys()
         if self.cfg.identity_pair_schedule == "balanced_ordered_pairs":
             # Consecutive seed ranges divisible by twelve contain every ordered
             # class pair equally often.  This is useful for offline expert
@@ -231,6 +281,18 @@ class Task(BaseTask):
             distractor_key = str(self.cfg.distractor_class_key)
             if distractor_key == reference_key:
                 raise ValueError("distractor_class_key must differ from reference_class_key")
+        return reference_key, distractor_key
+
+    def _fixed_pair_keys(self) -> tuple[str, str]:
+        reference_key = str(self.cfg.reference_class_key)
+        distractor_key = str(self.cfg.distractor_class_key)
+        if reference_key not in TACTILE_CLASSES or distractor_key not in TACTILE_CLASSES:
+            raise ValueError(
+                "compact_fixed_pair_scene requires explicit reference_class_key "
+                "and distractor_class_key from TACTILE_CLASSES"
+            )
+        if reference_key == distractor_key:
+            raise ValueError("compact_fixed_pair_scene requires different reference and distractor classes")
         return reference_key, distractor_key
 
     def _reset_episode_state(self):
@@ -419,6 +481,10 @@ class Task(BaseTask):
         self._probe_candidate("candidate_right")
         if not self.plan_success:
             return
+        if self.cfg.calibration_probe_only:
+            self.task_phase = "probe_complete"
+            self._sync_metadata()
+            return
         # The official expert may read the hidden match assignment only to
         # validate that the scene and transport chain are physically viable.
         # Tactile probes remain public measurements for offline or agent-owned
@@ -448,6 +514,8 @@ class Task(BaseTask):
             "protocol_id": PUBLIC_PROBE_PROTOCOL_ID,
             "side_grasp": True,
             "adaptive_close": True,
+            "close_target_force": float(self.cfg.probe_close_target_force),
+            "close_max_steps": int(self.cfg.probe_close_max_steps),
             "preload_steps": int(self.probe_delay_steps),
             "lift_height": float(self.weight_probe_lift_height),
             "hold_steps": int(self.weight_probe_hold_steps),
@@ -455,6 +523,60 @@ class Task(BaseTask):
             "min_bilateral_contact_ratio": float(self.cfg.probe_min_bilateral_ratio),
             "release_then_clearance": True,
         }
+
+    def capture_public_probe_frame(self) -> dict:
+        """Return one label-free tactile frame for an externally executed probe.
+
+        ``run_public_probe`` uses the same frame representation internally for
+        the official expert.  External controllers such as CaP-X may call this
+        bridge through their adapter while they execute the public protocol
+        themselves.  It deliberately contains no actor pose, physical class,
+        reward, or matching label.
+        """
+        return self._read_tactile_measurement(include_raw=False)
+
+    def aggregate_public_probe_window(self, frames: list[dict]) -> dict:
+        """Aggregate public probe frames with the expert's v3 statistics."""
+        return self._aggregate_tactile_window(frames)
+
+    def build_public_probe_record(
+        self,
+        object_name: str,
+        preload: dict,
+        lift_motion: dict,
+        hold: dict,
+        *,
+        approach_ok: bool,
+        close_ok: bool,
+        bilateral_gate: bool,
+        lift_ok: bool,
+        lower_ok: bool,
+        release_ok: bool,
+        clearance_ok: bool,
+    ) -> dict:
+        """Build ``tactile_probe.v3`` for an externally executed public probe.
+
+        This is a schema/measurement utility only.  It neither stores a task
+        memory nor selects a candidate, so downstream agents remain fully
+        responsible for trial-local memory and matching.
+        """
+        public_name = self._resolve_public_object_name(object_name)
+        if public_name is None:
+            raise KeyError(f"Unknown public probe object: {object_name!r}")
+        key = "reference" if public_name == "reference_object" else public_name
+        return self._build_tactile_probe(
+            key,
+            preload,
+            lift_motion,
+            hold,
+            approach_ok=bool(approach_ok),
+            close_ok=bool(close_ok),
+            bilateral_gate=bool(bilateral_gate),
+            lift_ok=bool(lift_ok),
+            lower_ok=bool(lower_ok),
+            release_ok=bool(release_ok),
+            clearance_ok=bool(clearance_ok),
+        )
 
     def run_public_probe(self, object_name: str) -> dict:
         """Execute the benchmark probe and return raw tactile data plus v3 summary.
@@ -1214,7 +1336,11 @@ class Task(BaseTask):
         self.metadata[f"tactile_probe_{metadata_key}"] = probe
 
     def _record_tactile_timeline(self):
-        if not hasattr(self, "tactile_timeline") or self.step_count % self.timeline_frequency != 0:
+        if (
+            not self.cfg.record_tactile_timeline
+            or not hasattr(self, "tactile_timeline")
+            or self.step_count % self.timeline_frequency != 0
+        ):
             return
         measurement = self._read_tactile_measurement()
         row = {
@@ -1331,6 +1457,12 @@ class Task(BaseTask):
 
     def check_success(self):
         self._update_task_state()
+        if self.cfg.calibration_probe_only:
+            return bool(
+                self.tactile_probes.get("reference", {}).get("quality", {}).get("valid", False)
+                and self.tactile_probes.get("candidate_left", {}).get("quality", {}).get("valid", False)
+                and self.tactile_probes.get("candidate_right", {}).get("quality", {}).get("valid", False)
+            )
         return bool(
             self.selection_correct
             and self.match_candidate_placed
