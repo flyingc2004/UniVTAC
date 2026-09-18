@@ -20,7 +20,10 @@ TACTILE_CLASSES = {
         "label": f"{weight}-{roughness}-{hardness}",
         "asset": asset,
         "diameter": 4,
-        "length": 0.120,
+        # This is the true mesh length of Can_d4cm.usd, not an abstract task
+        # parameter. Keeping it identical for both assets prevents geometry
+        # length from becoming a roughness cue.
+        "length": 0.080,
         "weight": weight,
         "roughness": roughness,
         "hardness": hardness,
@@ -107,7 +110,7 @@ class Task(BaseTask):
     placement_supported_z_threshold = 0.012
     placement_stable_steps_required = 10
     pad_half_extents = np.array([0.045, 0.045], dtype=np.float64)
-    can_length = 0.120
+    can_length = 0.080
     placement_overlap_margin = 0.004
     timeline_frequency = 5
     probe_delay_steps = 18
