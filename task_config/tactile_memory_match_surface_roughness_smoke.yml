@@ -1,0 +1,36 @@
+# Surface-geometry roughness gate. The runner supplies one fixed pair per
+# process, so every episode contains only reference, match, and distractor.
+save_dir: ./data
+
+decimation: 1
+save_frequency: 0
+video_frequency: 0
+render_frequency: 0
+preserve_raw_cache: false
+save_hdf5: false
+headless: true
+livestream: 0
+
+random_texture: false
+
+use_seed: true
+episode_num: 4
+start_seed: 5100
+max_seed: 5103
+
+sensor_type: gsmini
+reset_time_limit: 900
+step_lim: 500
+max_save_frames: 5000
+live_preview_enabled: false
+
+task_cfg_overrides:
+  compact_fixed_pair_scene: true
+  reference_class_key: light_smooth_rigid
+  distractor_class_key: light_rough_rigid
+  probe_min_bilateral_ratio: 0.8
+  calibration_probe_only: true
+  record_tactile_timeline: false
+
+observations:
+  tactile: ['marker', 'depth']

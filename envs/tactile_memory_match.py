@@ -4,25 +4,31 @@ import numpy as np
 
 
 _WEIGHT_VARIANTS = {"light": 300.0, "heavy": 650.0}
-_ROUGHNESS_VARIANTS = {"smooth": 1.5, "rough": 2.8}
+_ROUGHNESS_VARIANTS = {
+    "smooth": "Can_d4cm.usd",
+    "rough": "Can_d4cm_axial_ridges.usda",
+}
 _HARDNESS_VARIANTS = ("rigid", "soft")
+_UNIFORM_FRICTION_RATIO = 2.5
+ROUGHNESS_MECHANISM = "surface_geometry_axial_ridges_v1"
 
-# Every physical class deliberately uses the same visible mesh.  The task never
-# exposes this table: it belongs to scene construction and private scoring only.
+# Roughness is encoded only in the closed contact mesh. Density and material
+# constitution remain independent weight and hardness slots. This private table
+# is never returned through task observations or the public probe API.
 TACTILE_CLASSES = {
     f"{weight}_{roughness}_{hardness}": {
         "label": f"{weight}-{roughness}-{hardness}",
-        "asset": "Can_d4cm.usd",
+        "asset": asset,
         "diameter": 4,
         "length": 0.120,
         "weight": weight,
         "roughness": roughness,
         "hardness": hardness,
         "density": density,
-        "friction_ratio": friction_ratio,
+        "friction_ratio": _UNIFORM_FRICTION_RATIO,
     }
     for weight, density in _WEIGHT_VARIANTS.items()
-    for roughness, friction_ratio in _ROUGHNESS_VARIANTS.items()
+    for roughness, asset in _ROUGHNESS_VARIANTS.items()
     for hardness in _HARDNESS_VARIANTS
 }
 
@@ -141,9 +147,9 @@ class Task(BaseTask):
         if not 0.0 < cfg.probe_min_bilateral_ratio <= 1.0:
             raise ValueError("probe_min_bilateral_ratio must be in (0, 1]")
         self.occlusion_enabled = bool(cfg.occlusion_enabled)
-        cfg.sim.physics_material.dynamic_friction = 1.5
-        cfg.sim.physics_material.static_friction = 1.5
-        cfg.uipc_sim.contact.default_friction_ratio = 2.5
+        cfg.sim.physics_material.dynamic_friction = _UNIFORM_FRICTION_RATIO
+        cfg.sim.physics_material.static_friction = _UNIFORM_FRICTION_RATIO
+        cfg.uipc_sim.contact.default_friction_ratio = _UNIFORM_FRICTION_RATIO
         super().__init__(cfg, mode, render_mode, **kwargs)
 
     def create_actors(self):
@@ -597,7 +603,7 @@ class Task(BaseTask):
         )
 
     def run_public_probe(self, object_name: str) -> dict:
-        """Execute the benchmark probe and return raw tactile data plus v3 summary.
+        """Execute the benchmark probe and return raw tactile data plus v4 summary.
 
         This is a controlled measurement primitive, not a memory, scorer, pose
         service, or candidate selector.  It intentionally has no access to
@@ -1444,6 +1450,7 @@ class Task(BaseTask):
         )
         public_record = {
             "schema_version": "tactile_memory_match_public_episode.v4",
+            "roughness_mechanism": ROUGHNESS_MECHANISM,
             "seed": int(self.cfg.seed),
             "task": "tactile_memory_match",
             "probe_spec": self.get_public_probe_spec(),
@@ -1453,6 +1460,7 @@ class Task(BaseTask):
         self._update_seed_json(self.metadata_path, public_record)
         private_record = {
             "schema_version": "tactile_memory_match_private_episode.v4",
+            "roughness_mechanism": ROUGHNESS_MECHANISM,
             "seed": int(self.cfg.seed),
             **self.metadata,
         }
@@ -1542,15 +1550,6 @@ class Task(BaseTask):
     def _resting_z(variant: dict) -> float:
         diameter_cm = int(variant.get("diameter", 4))
         return 0.005 * float(diameter_cm) + 0.001
-
-    @staticmethod
-    def _public_variant(variant: dict) -> dict:
-        return {
-            "asset": str(variant["asset"]),
-            "diameter": int(variant["diameter"]),
-            "density": float(variant["density"]),
-            "friction_ratio": float(variant["friction_ratio"]),
-        }
 
     def _variant_for_public_candidate(self, public_name: str) -> dict:
         if public_name == self.match_candidate_public_name:

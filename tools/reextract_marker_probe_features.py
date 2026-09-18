@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-extract directional marker features from public tactile_probe.v3 raw NPZ.
+"""Re-extract public tactile features from tactile_probe raw NPZ archives.
 
 This is an offline diagnostic for ``tactile_memory_match``.  It reads only
 public raw tactile probe recordings to form descriptors, then reads the
@@ -7,12 +7,10 @@ private match assignment *after prediction* to score reference-to-candidate
 matching.  It does not use pose, density, friction, hardness, reward, or task
 success as features.
 
-The tool compares the current magnitude/coherence delta descriptor with
-direction-preserving mean marker ``dx/dy``, cross-finger shear, depth, and a
-diagnostic grid-gradient anisotropy.  The anisotropy assumes TacEx's 64 marker
-indices form the same row-major 8x8 grid already used by the existing raw
-analysis tools; it is deliberately labelled ``v0`` rather than treated as an
-exact reproduction of another implementation.
+The tool compares directional marker, depth, and spatial marker-grid
+descriptors. ``composable_slot_fusion_v1`` is an offline equal-weight fusion of
+public weight, roughness, and hardness evidence; it is not task-side memory or
+a learned classifier.
 """
 
 from __future__ import annotations
@@ -20,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -30,7 +29,7 @@ import numpy as np
 OBJECTS = ("reference", "candidate_left", "candidate_right")
 HANDS = ("left", "right")
 SEGMENTS = ("preload", "lift_motion")
-SCHEMA_VERSION = "marker_feature_reextraction.v1"
+SCHEMA_VERSION = "marker_feature_reextraction.v2"
 
 
 def _finite_median(values: np.ndarray, label: str) -> float:
@@ -48,7 +47,7 @@ def _depth_frame_metrics(depth: np.ndarray, far_plane_mm: float) -> dict[str, fl
         raise ValueError("depth frame contains no finite values")
     indentation = np.clip(float(far_plane_mm) - values, 0.0, None)
     return {
-        # Existing v3 summary: robust indentation, equivalent to far_plane - p5(depth).
+        # Existing public summary: robust indentation, equivalent to far_plane - p5(depth).
         "depth_p5_mm": float(np.percentile(indentation, 95.0)),
         # Candidate for the colleague's min(depth) formulation; intentionally less robust.
         "depth_min_mm": float(np.max(indentation)),
@@ -77,6 +76,7 @@ def _marker_frame_metrics(marker: np.ndarray) -> dict[str, float]:
     col_gradient = float(np.sqrt(np.nanmean(np.square(np.diff(grid, axis=1)))))
     denominator = row_gradient + col_gradient
     signed_anisotropy = 0.0 if denominator <= 1e-12 else float((row_gradient - col_gradient) / denominator)
+    log_anisotropy = float(math.log(max(row_gradient, 1e-12)) - math.log(max(col_gradient, 1e-12)))
 
     return {
         "marker_dx_px": float(mean_flow[0]),
@@ -87,6 +87,7 @@ def _marker_frame_metrics(marker: np.ndarray) -> dict[str, float]:
         "marker_col_gradient_px": col_gradient,
         "marker_anisotropy_signed_v0": float(np.clip(signed_anisotropy, -1.0, 1.0)),
         "marker_anisotropy_ratio_v0": float(row_gradient / max(col_gradient, 1e-12)),
+        "marker_log_anisotropy_v1": log_anisotropy,
     }
 
 
@@ -129,6 +130,7 @@ def _object_features(npz: Any, object_name: str, far_plane_mm: float) -> dict[st
             "marker_col_gradient_px",
             "marker_anisotropy_signed_v0",
             "marker_anisotropy_ratio_v0",
+            "marker_log_anisotropy_v1",
         ):
             values[f"lift_minus_preload.{hand}.{name}"] = (
                 values[f"lift_motion.{hand}.{name}"] - values[f"preload.{hand}.{name}"]
@@ -145,6 +147,18 @@ def _delta_fields(metric: str) -> tuple[str, str]:
 
 
 DESCRIPTORS: dict[str, tuple[str, ...]] = {
+    # Slot-specific public evidence used by composable_slot_fusion_v1.
+    # Dynamic normal indentation is the mass-sensitive component of the
+    # expert-aligned lift probe, while preload indentation is the compliance
+    # component. Surface roughness uses preload only, so it is not a second
+    # interpretation of the same lift/slip signal.
+    "weight_dynamic_depth_p5_2d": _delta_fields("depth_p5_mm"),
+    "hardness_static_depth_p5_2d": _hand_fields("preload", "depth_p5_mm"),
+    "roughness_surface_geometry_static_6d": (
+        _hand_fields("preload", "marker_row_gradient_px")
+        + _hand_fields("preload", "marker_col_gradient_px")
+        + _hand_fields("preload", "marker_log_anisotropy_v1")
+    ),
     # Exact family currently used by the provisional v0 expression.
     "current_marker_delta_4d": _delta_fields("marker_displacement_px") + _delta_fields("marker_coherence"),
     # Preserves the mean marker flow vector which the current public summary discards.
@@ -176,6 +190,13 @@ DESCRIPTORS: dict[str, tuple[str, ...]] = {
         + _delta_fields("marker_anisotropy_signed_v0")
     ),
 }
+
+COMPOSABLE_SLOT_EXPRESSIONS = {
+    "weight": "weight_dynamic_depth_p5_2d",
+    "roughness": "roughness_surface_geometry_static_6d",
+    "hardness": "hardness_static_depth_p5_2d",
+}
+COMPOSABLE_SLOT_FUSION = "composable_slot_fusion_v1"
 
 # Candidate image-to-common-contact-frame transforms for the *right* sensor.
 # They span the 2D mirror/axis-swap possibilities caused by opposite sensor
@@ -326,6 +347,48 @@ def _predict(episode: dict[str, Any], descriptor_name: str, scaler: dict[str, li
         "correct": bool(selected == episode["match_candidate"]),
         "used_dimensions": int(np.count_nonzero(active)),
         "omitted_dynamic_fields": omitted_fields,
+        "slot_distances": {},
+        "active_slots": [],
+    }
+
+
+def _fit_composable_scalers(episodes: list[dict[str, Any]]) -> dict[str, dict[str, list[float]]]:
+    return {
+        slot: _fit_scaler(episodes, descriptor_name)
+        for slot, descriptor_name in COMPOSABLE_SLOT_EXPRESSIONS.items()
+    }
+
+
+def _predict_composable(
+    episode: dict[str, Any], scalers: dict[str, dict[str, list[float]]]
+) -> dict[str, Any]:
+    slot_distances: dict[str, dict[str, float]] = {}
+    scores = {"candidate_left": 0.0, "candidate_right": 0.0}
+    used_dimensions = 0
+    for slot, descriptor_name in COMPOSABLE_SLOT_EXPRESSIONS.items():
+        scale = np.asarray(scalers[slot]["iqr"], dtype=np.float64)
+        reference = _vector(episode["features"]["reference"], descriptor_name)
+        used_dimensions += len(reference)
+        distances = {}
+        for candidate in scores:
+            candidate_vector = _vector(episode["features"][candidate], descriptor_name)
+            distances[candidate] = float(np.sqrt(np.mean(np.square((reference - candidate_vector) / scale))))
+            scores[candidate] += distances[candidate]
+        slot_distances[slot] = distances
+
+    for candidate in scores:
+        scores[candidate] /= len(COMPOSABLE_SLOT_EXPRESSIONS)
+    selected = min(scores, key=scores.get)
+    return {
+        "score_left": scores["candidate_left"],
+        "score_right": scores["candidate_right"],
+        "margin": abs(scores["candidate_left"] - scores["candidate_right"]),
+        "selected": selected,
+        "correct": bool(selected == episode["match_candidate"]),
+        "used_dimensions": used_dimensions,
+        "omitted_dynamic_fields": [],
+        "slot_distances": slot_distances,
+        "active_slots": list(COMPOSABLE_SLOT_EXPRESSIONS),
     }
 
 
@@ -356,7 +419,9 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _load_episodes(data_root: Path, far_plane_mm: float) -> tuple[list[dict[str, Any]], Counter[str], list[dict[str, Any]]]:
+def _load_episodes(
+    data_root: Path, far_plane_mm: float, required_roughness_mechanism: str | None = None
+) -> tuple[list[dict[str, Any]], Counter[str], list[dict[str, Any]]]:
     episodes: list[dict[str, Any]] = []
     rejected: Counter[str] = Counter()
     manifest: list[dict[str, Any]] = []
@@ -387,8 +452,20 @@ def _load_episodes(data_root: Path, far_plane_mm: float) -> tuple[list[dict[str,
                 "tactile_memory_match_public_episode.v3",
                 "tactile_memory_match_public_episode.v4",
             }:
-                rejected["not_public_probe_v3"] += 1
-                manifest.append({**base, "accepted": False, "reason": "not_public_probe_v3"})
+                rejected["not_public_probe"] += 1
+                manifest.append({**base, "accepted": False, "reason": "not_public_probe"})
+                continue
+            mechanism = public.get("roughness_mechanism")
+            if required_roughness_mechanism is not None and mechanism != required_roughness_mechanism:
+                rejected["roughness_mechanism_mismatch"] += 1
+                manifest.append(
+                    {
+                        **base,
+                        "accepted": False,
+                        "reason": "roughness_mechanism_mismatch",
+                        "roughness_mechanism": mechanism,
+                    }
+                )
                 continue
             probes = public.get("probes", {})
             if not all(isinstance(probes.get(name), dict) and probes[name].get("quality", {}).get("valid") for name in OBJECTS):
@@ -419,6 +496,7 @@ def _load_episodes(data_root: Path, far_plane_mm: float) -> tuple[list[dict[str,
                 "seed": int(seed_text),
                 "raw_path": str(raw_path),
                 "match_candidate": str(match),
+                "roughness_mechanism": mechanism,
                 # Labels below are audit-only.  They do not enter extraction, scaling, or prediction.
                 "reference_class": private.get("reference_class_key"),
                 "distractor_class": private.get("distractor_class_key"),
@@ -437,13 +515,21 @@ def _run_oof(episodes: list[dict[str, Any]], descriptor_name: str, folds: int) -
         test = [episode for episode in episodes if episode["seed"] % folds == fold]
         if not train or not test:
             continue
-        scaler = _fit_scaler(train, descriptor_name)
+        if descriptor_name == COMPOSABLE_SLOT_FUSION:
+            scalers = _fit_composable_scalers(train)
+        else:
+            scaler = _fit_scaler(train, descriptor_name)
         for episode in test:
             row = {
                 key: episode[key]
                 for key in ("run", "seed", "reference_class", "distractor_class", "changed_slots", "match_candidate")
             }
-            row.update({"descriptor": descriptor_name, "fold": fold, **_predict(episode, descriptor_name, scaler)})
+            prediction = (
+                _predict_composable(episode, scalers)
+                if descriptor_name == COMPOSABLE_SLOT_FUSION
+                else _predict(episode, descriptor_name, scaler)
+            )
+            row.update({"descriptor": descriptor_name, "fold": fold, **prediction})
             rows.append(row)
     return rows
 
@@ -454,11 +540,18 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--far-plane-mm", type=float, default=34.0, help="TacEx sensor far plane used to convert depth to indentation")
     parser.add_argument("--folds", type=int, default=5)
+    parser.add_argument(
+        "--require-roughness-mechanism",
+        default=None,
+        help="Reject public records from a different roughness implementation.",
+    )
     args = parser.parse_args()
     if args.folds < 2:
         raise ValueError("--folds must be at least 2")
 
-    episodes, rejected, manifest = _load_episodes(args.data_root.resolve(), args.far_plane_mm)
+    episodes, rejected, manifest = _load_episodes(
+        args.data_root.resolve(), args.far_plane_mm, args.require_roughness_mechanism
+    )
     if not episodes:
         raise RuntimeError("No valid three-object public raw probe episodes found")
 
@@ -470,7 +563,16 @@ def main() -> int:
         [
             {
                 key: episode[key]
-                for key in ("run", "seed", "reference_class", "distractor_class", "changed_slots", "match_candidate", "features")
+                for key in (
+                    "run",
+                    "seed",
+                    "reference_class",
+                    "distractor_class",
+                    "changed_slots",
+                    "match_candidate",
+                    "roughness_mechanism",
+                    "features",
+                )
             }
             for episode in episodes
         ],
@@ -478,7 +580,7 @@ def main() -> int:
 
     all_rows: list[dict[str, Any]] = []
     reports: dict[str, Any] = {}
-    for descriptor_name in (*DESCRIPTORS, *GATED_DESCRIPTORS):
+    for descriptor_name in (*DESCRIPTORS, *GATED_DESCRIPTORS, COMPOSABLE_SLOT_FUSION):
         rows = _run_oof(episodes, descriptor_name, args.folds)
         all_rows.extend(rows)
         by_change: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -486,6 +588,12 @@ def main() -> int:
             by_change[str(row["changed_slots"])].append(row)
         reports[descriptor_name] = {
             "description": {
+                "weight_dynamic_depth_p5_2d": "Bilateral lift-minus-preload depth p5: public weight evidence.",
+                "hardness_static_depth_p5_2d": "Bilateral preload depth p5: public hardness evidence.",
+                "roughness_surface_geometry_static_6d": (
+                    "Bilateral preload marker row/column gradients and log anisotropy: "
+                    "surface-geometry roughness evidence."
+                ),
                 "current_marker_delta_4d": "Current v0 public marker magnitude/coherence lift-minus-preload.",
                 "directional_flow_8d": "Per-hand static mean dx/dy plus lift-minus-preload dx/dy.",
                 "cross_finger_x_shear_2d": "Cross-finger x shear at preload and lift-minus-preload.",
@@ -494,6 +602,10 @@ def main() -> int:
                 "depth_p5_4d": "Robust p5 indentation at preload plus lift-minus-preload.",
                 "depth_min_4d": "Max indentation (far-plane minus min depth) at preload plus lift-minus-preload.",
                 "combined_direction_depth_anisotropy_16d": "Diagnostic concatenation; not a frozen memory expression.",
+                COMPOSABLE_SLOT_FUSION: (
+                    "Equal-weight public distance fusion of weight dynamic depth, roughness static geometry, "
+                    "and hardness static depth."
+                ),
                 "grid_gradient_anisotropy_gate_4iqr": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 4 training-fold IQRs.",
                 "grid_gradient_anisotropy_gate_8iqr": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 8 training-fold IQRs.",
                 "grid_gradient_anisotropy_gate_12iqr": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 12 training-fold IQRs.",
@@ -513,25 +625,30 @@ def main() -> int:
     columns = [
         "descriptor", "run", "seed", "fold", "reference_class", "distractor_class", "changed_slots",
         "match_candidate", "selected", "correct", "score_left", "score_right", "margin",
-        "used_dimensions", "omitted_dynamic_fields",
+        "used_dimensions", "omitted_dynamic_fields", "active_slots", "slot_distances",
     ]
     with prediction_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
+        for row in all_rows:
+            row["slot_distances"] = json.dumps(row["slot_distances"], sort_keys=True)
+            row["active_slots"] = ",".join(row["active_slots"])
         writer.writerows(all_rows)
 
     report = {
         "schema_version": SCHEMA_VERSION,
         "data_root": str(args.data_root.resolve()),
         "far_plane_mm": float(args.far_plane_mm),
+        "required_roughness_mechanism": args.require_roughness_mechanism,
         "valid_episodes": len(episodes),
         "rejected": dict(sorted(rejected.items())),
         "important_limitations": [
             "Private match labels are used only after reference-to-candidate predictions for offline scoring.",
-            "The saved v3 raw probe has one preload and one lift-motion segment, not two controlled squeeze levels.",
+            "The saved public probe has one preload and one lift-motion segment, not two controlled squeeze levels.",
             "grid_gradient_anisotropy_v0 is a transparent candidate definition, not an exact implementation of any external metric.",
             "Right-hand flow-transform variants are diagnostic only.  Future raw archives include tactile attachment poses; use them with a label-free calibration motion before freezing a common contact frame.",
             "OOF scaling is unsupervised median/IQR scaling on training-fold public values; no classifier is trained.",
+            "Composable fusion is a provisional task-external diagnostic; it must not be frozen from this report alone.",
         ],
         "descriptors": reports,
         "artifacts": {
