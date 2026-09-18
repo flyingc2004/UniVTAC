@@ -47,16 +47,21 @@ def main() -> int:
     args = parser.parse_args()
     if args.sides < 12 or args.radius <= 0.0 or args.length <= 0.0:
         raise ValueError("sides >= 12 and positive radius/length are required")
-    if args.ridge_count < 1 or args.ridge_amplitude < 0.0:
-        raise ValueError("ridge count must be positive and amplitude non-negative")
+    if args.ridge_count < 1 or not 0.0 <= args.ridge_amplitude < args.radius:
+        raise ValueError("ridge count must be positive and ridge amplitude must be in [0, radius)")
 
     points: list[tuple[float, float, float]] = []
     # Match the source asset's local frame: X in [-length, 0], circular Y/Z.
     for x in (-args.length, 0.0):
         for index in range(args.sides):
             theta = 2.0 * math.pi * index / args.sides
-            radius = args.radius + args.ridge_amplitude * math.sin(args.ridge_count * theta)
-            points.append((x, radius * math.cos(theta), radius * math.sin(theta)))
+            # Keep the original can's outer envelope exactly 4 cm across.
+            # Ridges are therefore shallow inward valleys plus peaks that
+            # touch, rather than exceed, the source mesh's nominal radius.
+            local_radius = args.radius - args.ridge_amplitude + args.ridge_amplitude * math.sin(
+                args.ridge_count * theta
+            )
+            points.append((x, local_radius * math.cos(theta), local_radius * math.sin(theta)))
     start_center = len(points)
     points.append((-args.length, 0.0, 0.0))
     end_center = len(points)
