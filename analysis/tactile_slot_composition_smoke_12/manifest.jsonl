@@ -1,0 +1,12 @@
+{"distractor_class": "heavy-rough", "match_candidate": "candidate_right", "reason": "", "reference_class": "heavy-smooth", "seed": 2000, "status": "valid"}
+{"distractor_class": "light-smooth", "match_candidate": "candidate_left", "reason": "", "reference_class": "heavy-rough", "seed": 2001, "status": "valid"}
+{"distractor_class": "light-rough", "match_candidate": "candidate_right", "reason": "", "reference_class": "heavy-rough", "seed": 2002, "status": "valid"}
+{"distractor_class": "heavy-smooth", "match_candidate": "candidate_left", "reason": "", "reference_class": "heavy-rough", "seed": 2003, "status": "valid"}
+{"distractor_class": "light-rough", "match_candidate": "candidate_right", "reason": "", "reference_class": "light-smooth", "seed": 2004, "status": "valid"}
+{"distractor_class": "heavy-smooth", "match_candidate": "candidate_right", "reason": "", "reference_class": "light-smooth", "seed": 2005, "status": "valid"}
+{"distractor_class": "heavy-rough", "match_candidate": "candidate_right", "reason": "", "reference_class": "light-smooth", "seed": 2006, "status": "valid"}
+{"distractor_class": "light-smooth", "match_candidate": "candidate_right", "reason": "", "reference_class": "light-rough", "seed": 2007, "status": "valid"}
+{"distractor_class": "heavy-smooth", "match_candidate": "candidate_right", "reason": "", "reference_class": "light-rough", "seed": 2008, "status": "valid"}
+{"distractor_class": "heavy-rough", "match_candidate": "candidate_left", "reason": "invalid_probe:candidate_left", "reference_class": "light-rough", "seed": 2009, "status": "rejected"}
+{"distractor_class": "light-smooth", "match_candidate": "candidate_left", "reason": "", "reference_class": "heavy-smooth", "seed": 2010, "status": "valid"}
+{"distractor_class": "light-rough", "match_candidate": "candidate_right", "reason": "", "reference_class": "heavy-smooth", "seed": 2011, "status": "valid"}

@@ -1,0 +1,45 @@
+{
+  "dataset_root": "data/tactile_memory_match/tactile_memory_match_slot_calibration",
+  "feature_policy": {
+    "fusion": "0.875 * weight_distance + 1.0 * roughness_distance",
+    "labels_used_only_for_scoring": true,
+    "normalization": "leave-one-seed-out, all-object unlabeled median/IQR per slot",
+    "roughness_slot": "[left_delta_marker_displacement_px, right_delta_marker_displacement_px]",
+    "weight_slot": "[left_delta_marker_coherence, right_delta_marker_coherence]"
+  },
+  "metrics": {
+    "combined_identity": {
+      "correct": 6,
+      "macro_accuracy": 0.5,
+      "mean_confidence": 0.18230202313522373,
+      "overall_accuracy": 0.5454545454545454,
+      "per_reference_class_accuracy": {
+        "heavy-rough": 1.0,
+        "heavy-smooth": 1.0,
+        "light-rough": 0.0,
+        "light-smooth": 0.0
+      },
+      "valid_episodes": 11
+    },
+    "roughness_slot_on_roughness_contrast_pairs": {
+      "accuracy": 0.5,
+      "mean_confidence": 0.25261185752325854,
+      "valid_pairs": 8
+    },
+    "weight_slot_on_weight_contrast_pairs": {
+      "accuracy": 0.5714285714285714,
+      "mean_confidence": 0.24984610019645767,
+      "valid_pairs": 7
+    }
+  },
+  "quality": {
+    "metadata_episodes": 12,
+    "rejected_episodes": 1,
+    "rejections": {
+      "invalid_probe:candidate_left": 1
+    },
+    "valid_episodes": 11
+  },
+  "schema_version": "tactile_composable_slots_smoke.v1",
+  "warning": "12-seed smoke is a pipeline check only; slot reliability cannot be claimed from this sample size."
+}

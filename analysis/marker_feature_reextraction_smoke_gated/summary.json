@@ -1,0 +1,185 @@
+{
+  "schema_version": "marker_feature_reextraction.v1",
+  "data_root": "/mnt/sdc/ljz/UniVTAC/data/tactile_memory_match/tactile_memory_match_composable_smoke",
+  "far_plane_mm": 34.0,
+  "valid_episodes": 10,
+  "rejected": {},
+  "important_limitations": [
+    "Private match labels are used only after reference-to-candidate predictions for offline scoring.",
+    "The saved v3 raw probe has one preload and one lift-motion segment, not two controlled squeeze levels.",
+    "grid_gradient_anisotropy_v0 is a transparent candidate definition, not an exact implementation of any external metric.",
+    "OOF scaling is unsupervised median/IQR scaling on training-fold public values; no classifier is trained."
+  ],
+  "descriptors": {
+    "current_marker_delta_4d": {
+      "description": "Current v0 public marker magnitude/coherence lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 0.9,
+        "mean_margin": 1.1212265842368396
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 0.9,
+          "mean_margin": 1.1212265842368396
+        }
+      }
+    },
+    "directional_flow_8d": {
+      "description": "Per-hand static mean dx/dy plus lift-minus-preload dx/dy.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.9550924270982935
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.9550924270982935
+        }
+      }
+    },
+    "cross_finger_x_shear_2d": {
+      "description": "Cross-finger x shear at preload and lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 1.1028498459616896
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 1.1028498459616896
+        }
+      }
+    },
+    "cross_finger_xy_shear_4d": {
+      "description": "Cross-finger x/y shear at preload and lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.7935783173506097
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.7935783173506097
+        }
+      }
+    },
+    "grid_gradient_anisotropy_4d": {
+      "description": "Signed row-vs-column marker-grid gradient statistic; candidate v0 interpretation.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.7515634785666367
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.7515634785666367
+        }
+      }
+    },
+    "depth_p5_4d": {
+      "description": "Robust p5 indentation at preload plus lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 0.9,
+        "mean_margin": 0.34134309280071906
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 0.9,
+          "mean_margin": 0.34134309280071906
+        }
+      }
+    },
+    "depth_min_4d": {
+      "description": "Max indentation (far-plane minus min depth) at preload plus lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 0.9,
+        "mean_margin": 1.3261626011748207
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 0.9,
+          "mean_margin": 1.3261626011748207
+        }
+      }
+    },
+    "combined_direction_depth_anisotropy_16d": {
+      "description": "Diagnostic concatenation; not a frozen memory expression.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.7427578081638961
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.7427578081638961
+        }
+      }
+    },
+    "grid_gradient_anisotropy_gate_4iqr": {
+      "description": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 4 training-fold IQRs.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.7515634785666367
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.7515634785666367
+        }
+      }
+    },
+    "grid_gradient_anisotropy_gate_8iqr": {
+      "description": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 8 training-fold IQRs.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.7515634785666367
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.7515634785666367
+        }
+      }
+    },
+    "grid_gradient_anisotropy_gate_12iqr": {
+      "description": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 12 training-fold IQRs.",
+      "five_fold_oof": {
+        "n": 10,
+        "accuracy": 1.0,
+        "mean_margin": 0.7515634785666367
+      },
+      "by_changed_slots": {
+        "hardness": {
+          "n": 10,
+          "accuracy": 1.0,
+          "mean_margin": 0.7515634785666367
+        }
+      }
+    }
+  },
+  "artifacts": {
+    "manifest": "manifest.jsonl",
+    "features": "feature_records.jsonl",
+    "predictions": "predictions.csv"
+  }
+}

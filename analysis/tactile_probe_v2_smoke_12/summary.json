@@ -1,0 +1,59 @@
+{
+  "dataset_root": "data/tactile_memory_match/tactile_memory_match_slot_calibration",
+  "metadata_episodes": 12,
+  "metrics": {
+    "dynamic_2d": {
+      "correct": 4,
+      "macro_accuracy": 0.375,
+      "mean_distractor_distance": 1.9762505827400085,
+      "mean_match_distance": 2.0463597226517662,
+      "overall_accuracy": 0.36363636363636365,
+      "per_reference_class_accuracy": {
+        "heavy-rough": 0.0,
+        "heavy-smooth": 0.6666666666666666,
+        "light-rough": 0.5,
+        "light-smooth": 0.3333333333333333
+      },
+      "positive_margin_rate": 0.36363636363636365,
+      "valid_episodes": 11
+    },
+    "semantic_signature_8d": {
+      "correct": 6,
+      "macro_accuracy": 0.49999999999999994,
+      "mean_distractor_distance": 4.28063946467539,
+      "mean_match_distance": 2.990961863170996,
+      "overall_accuracy": 0.5454545454545454,
+      "per_reference_class_accuracy": {
+        "heavy-rough": 0.6666666666666666,
+        "heavy-smooth": 1.0,
+        "light-rough": 0.0,
+        "light-smooth": 0.3333333333333333
+      },
+      "positive_margin_rate": 0.5454545454545454,
+      "valid_episodes": 11
+    },
+    "static_6d": {
+      "correct": 7,
+      "macro_accuracy": 0.625,
+      "mean_distractor_distance": 3.204307809256052,
+      "mean_match_distance": 1.9047294935726655,
+      "overall_accuracy": 0.6363636363636364,
+      "per_reference_class_accuracy": {
+        "heavy-rough": 1.0,
+        "heavy-smooth": 0.6666666666666666,
+        "light-rough": 0.5,
+        "light-smooth": 0.3333333333333333
+      },
+      "positive_margin_rate": 0.6363636363636364,
+      "valid_episodes": 11
+    }
+  },
+  "protocol": "leave-one-seed-out unsupervised median/IQR scaling; Euclidean reference-to-candidate distance; labels used only for scoring",
+  "rejected_episodes": 1,
+  "rejection_counts": {
+    "invalid_probe:candidate_left": 1
+  },
+  "schema_version": "tactile_probe_v2_pairwise_smoke.v1",
+  "valid_episodes": 11,
+  "warning": "12-seed smoke is a pipeline check, not a statistically adequate calibration set."
+}

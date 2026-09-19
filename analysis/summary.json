@@ -1,0 +1,713 @@
+{
+  "schema_version": "marker_feature_reextraction.v2",
+  "data_root": "/home/zhiyuan/bench/UniVTAC-test/data/tactile_memory_match/tactile_memory_match_surface_roughness_smoke",
+  "far_plane_mm": 34.0,
+  "required_roughness_mechanism": "surface_geometry_axial_ridges_v1",
+  "valid_episodes": 16,
+  "rejected": {},
+  "important_limitations": [
+    "Private match labels are used only after reference-to-candidate predictions for offline scoring.",
+    "The saved public probe has one preload and one lift-motion segment, not two controlled squeeze levels.",
+    "grid_gradient_anisotropy_v0 is a transparent candidate definition, not an exact implementation of any external metric.",
+    "Right-hand flow-transform variants are diagnostic only.  Future raw archives include tactile attachment poses; use them with a label-free calibration motion before freezing a common contact frame.",
+    "OOF scaling is unsupervised median/IQR scaling on training-fold public values; no classifier is trained.",
+    "Composable fusion is a provisional task-external diagnostic; it must not be frozen from this report alone."
+  ],
+  "descriptors": {
+    "weight_dynamic_depth_p5_2d": {
+      "description": "Bilateral lift-minus-preload depth p5: public weight evidence.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 1.5614760585973804
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.276090927433775
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.5673645696406366
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 2.2275823921367492
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.174866345178361
+        }
+      }
+    },
+    "hardness_static_depth_p5_2d": {
+      "description": "Bilateral preload depth p5: public hardness evidence.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 2.316689328563032
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.511195881394458
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.1246226614858035
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.5464728092561717
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.0844659621156945
+        }
+      }
+    },
+    "roughness_surface_geometry_static_6d": {
+      "description": "Bilateral preload marker row/column gradients and log anisotropy: surface-geometry roughness evidence.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 2.213426789197821
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.7283906750616107
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 3.6461006153400755
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.47870060037034046
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.000515266019258
+        }
+      }
+    },
+    "current_marker_delta_4d": {
+      "description": "Current v0 public marker magnitude/coherence lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.375,
+        "mean_margin": 1.0313000868354023
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 2.316577275848987
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.0,
+          "mean_margin": 0.25330919788028305
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.276490394550858
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.25,
+          "mean_margin": 0.2788234790614815
+        }
+      }
+    },
+    "directional_flow_8d": {
+      "description": "Per-hand static mean dx/dy plus lift-minus-preload dx/dy.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 4.331871777528792
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 3.1550331520871975
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 5.950690953837742
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 2.416051607149435
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 5.805711397040793
+        }
+      }
+    },
+    "cross_finger_x_shear_2d": {
+      "description": "Cross-finger x shear at preload and lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.625,
+        "mean_margin": 0.6681647043824495
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.20320273366490707
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.0419349670169102
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.0,
+          "mean_margin": 0.40091460809033413
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.0266065087576466
+        }
+      }
+    },
+    "cross_finger_xy_shear_4d": {
+      "description": "Cross-finger x/y shear at preload and lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.8125,
+        "mean_margin": 1.3430651645398917
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 2.1271371898969087
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 0.6940872879258289
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.8921603010222645
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 0.6588758793145653
+        }
+      }
+    },
+    "grid_gradient_anisotropy_4d": {
+      "description": "Signed row-vs-column marker-grid gradient statistic; candidate v0 interpretation.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.6875,
+        "mean_margin": 0.655053662364153
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.883520733065196
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.3650046271271434
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.9763139164541424
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.39537537281013
+        }
+      }
+    },
+    "depth_p5_4d": {
+      "description": "Robust p5 indentation at preload plus lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.9375,
+        "mean_margin": 2.081536671893204
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.9524209112052435
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 3.0275064892381036
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.471926501800023
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 2.8742927853294447
+        }
+      }
+    },
+    "depth_min_4d": {
+      "description": "Max indentation (far-plane minus min depth) at preload plus lift-minus-preload.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.6875,
+        "mean_margin": 1.6161235611445632
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 3.5504804523924682
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 0.6840641261928826
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 1.9060755834280645
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.25,
+          "mean_margin": 0.32387408256483763
+        }
+      }
+    },
+    "combined_direction_depth_anisotropy_16d": {
+      "description": "Diagnostic concatenation; not a frozen memory expression.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 3.1751658132913985
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 2.3093799506780694
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.387988392853495
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 1.7373363358755716
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.265958573758458
+        }
+      }
+    },
+    "cross_finger_xy_right_identity_4d": {
+      "description": "Diagnostic right-hand image-frame transform identity; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.8125,
+        "mean_margin": 1.3430651645398917
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 2.1271371898969087
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 0.6940872879258289
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.8921603010222645
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 0.6588758793145653
+        }
+      }
+    },
+    "cross_finger_xy_right_flip_x_4d": {
+      "description": "Diagnostic right-hand image-frame transform flip_x; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.8125,
+        "mean_margin": 1.4925374438229717
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 2.269356178808551
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.0085557172166
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.886195189757701
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 0.8060426895090356
+        }
+      }
+    },
+    "cross_finger_xy_right_flip_y_4d": {
+      "description": "Diagnostic right-hand image-frame transform flip_y; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 2.4511577050506457
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.607610405112772
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.2392244119474185
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.7533987572338419
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.20439724590855
+        }
+      }
+    },
+    "cross_finger_xy_right_flip_xy_4d": {
+      "description": "Diagnostic right-hand image-frame transform flip_xy; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 2.58807912202269
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.7717569772062269
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.395863978921109
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.930494574237867
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.254200957725558
+        }
+      }
+    },
+    "cross_finger_xy_right_swap_xy_4d": {
+      "description": "Diagnostic right-hand image-frame transform swap_xy; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.75,
+        "mean_margin": 1.3419409072396693
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.4892736467822233
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 2.298124911146452
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.16145672250874027
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 2.4189083485212617
+        }
+      }
+    },
+    "cross_finger_xy_right_swap_flip_x_4d": {
+      "description": "Diagnostic right-hand image-frame transform swap_flip_x; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.875,
+        "mean_margin": 1.0274871912850623
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 1.0854778749104759
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.4012814568571668
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.5845382255985077
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.0386512077740986
+        }
+      }
+    },
+    "cross_finger_xy_right_swap_flip_y_4d": {
+      "description": "Diagnostic right-hand image-frame transform swap_flip_y; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.75,
+        "mean_margin": 2.71601977238385
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.1051782290808094
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.462598908732129
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.7633060538357048
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.532995897886757
+        }
+      }
+    },
+    "cross_finger_xy_right_swap_flip_xy_4d": {
+      "description": "Diagnostic right-hand image-frame transform swap_flip_xy; must not be frozen without a physical frame calibration.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.8125,
+        "mean_margin": 2.5891329641361565
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 1.4902601136149813
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 4.019139652097289
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 1.0516296044636122
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 3.7955024863687434
+        }
+      }
+    },
+    "grid_gradient_anisotropy_gate_4iqr": {
+      "description": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 4 training-fold IQRs.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.625,
+        "mean_margin": 0.5255897597867853
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.688023878177875
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.3650046271271434
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.25,
+          "mean_margin": 0.6539551610319932
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.39537537281013
+        }
+      }
+    },
+    "grid_gradient_anisotropy_gate_8iqr": {
+      "description": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 8 training-fold IQRs.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.6875,
+        "mean_margin": 0.655053662364153
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.883520733065196
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.3650046271271434
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.9763139164541424
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.39537537281013
+        }
+      }
+    },
+    "grid_gradient_anisotropy_gate_12iqr": {
+      "description": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 12 training-fold IQRs.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.6875,
+        "mean_margin": 0.655053662364153
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.883520733065196
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.3650046271271434
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 0.5,
+          "mean_margin": 0.9763139164541424
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.39537537281013
+        }
+      }
+    },
+    "composable_slot_fusion_v1": {
+      "description": "Equal-weight public distance fusion of weight dynamic depth, roughness static geometry, and hardness static depth.",
+      "five_fold_oof": {
+        "n": 16,
+        "accuracy": 0.9375,
+        "mean_margin": 2.020523081057184
+      },
+      "by_changed_slots": {
+        "roughness": {
+          "n": 4,
+          "accuracy": 0.75,
+          "mean_margin": 0.8178707845028204
+        },
+        "roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 3.1126959488221715
+        },
+        "weight+roughness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 1.0649097331326405
+        },
+        "weight+roughness+hardness": {
+          "n": 4,
+          "accuracy": 1.0,
+          "mean_margin": 3.0866158577711045
+        }
+      }
+    }
+  },
+  "artifacts": {
+    "manifest": "manifest.jsonl",
+    "features": "feature_records.jsonl",
+    "predictions": "predictions.csv"
+  }
+}
