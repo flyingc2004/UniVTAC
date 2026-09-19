@@ -198,6 +198,17 @@ COMPOSABLE_SLOT_EXPRESSIONS = {
 }
 COMPOSABLE_SLOT_FUSION = "composable_slot_fusion_v1"
 
+# Runtime-neutral alias for the same non-overlapping public response families.
+# Unlike the historical names above, these names describe how the sensor
+# responds during the probe rather than asserting that a feature belongs to a
+# single independent physical attribute.
+TACTILE_RESPONSE_BLOCKS_V1 = {
+    "normal_static": "hardness_static_depth_p5_2d",
+    "normal_dynamic": "weight_dynamic_depth_p5_2d",
+    "surface_spatial_static": "roughness_surface_geometry_static_6d",
+}
+TACTILE_RESPONSE_FUSION_V1 = "tactile_response_blocks_v1"
+
 # Candidate image-to-common-contact-frame transforms for the *right* sensor.
 # They span the 2D mirror/axis-swap possibilities caused by opposite sensor
 # mounting.  This is a diagnostic sweep only: a production protocol must fix
@@ -353,19 +364,30 @@ def _predict(episode: dict[str, Any], descriptor_name: str, scaler: dict[str, li
 
 
 def _fit_composable_scalers(episodes: list[dict[str, Any]]) -> dict[str, dict[str, list[float]]]:
-    return {
-        slot: _fit_scaler(episodes, descriptor_name)
-        for slot, descriptor_name in COMPOSABLE_SLOT_EXPRESSIONS.items()
-    }
+    return _fit_block_scalers(episodes, COMPOSABLE_SLOT_EXPRESSIONS)
+
+
+def _fit_block_scalers(
+    episodes: list[dict[str, Any]], blocks: dict[str, str]
+) -> dict[str, dict[str, list[float]]]:
+    return {name: _fit_scaler(episodes, descriptor_name) for name, descriptor_name in blocks.items()}
 
 
 def _predict_composable(
     episode: dict[str, Any], scalers: dict[str, dict[str, list[float]]]
 ) -> dict[str, Any]:
+    return _predict_block_fusion(episode, scalers, COMPOSABLE_SLOT_EXPRESSIONS)
+
+
+def _predict_block_fusion(
+    episode: dict[str, Any],
+    scalers: dict[str, dict[str, list[float]]],
+    blocks: dict[str, str],
+) -> dict[str, Any]:
     slot_distances: dict[str, dict[str, float]] = {}
     scores = {"candidate_left": 0.0, "candidate_right": 0.0}
     used_dimensions = 0
-    for slot, descriptor_name in COMPOSABLE_SLOT_EXPRESSIONS.items():
+    for slot, descriptor_name in blocks.items():
         scale = np.asarray(scalers[slot]["iqr"], dtype=np.float64)
         reference = _vector(episode["features"]["reference"], descriptor_name)
         used_dimensions += len(reference)
@@ -377,7 +399,7 @@ def _predict_composable(
         slot_distances[slot] = distances
 
     for candidate in scores:
-        scores[candidate] /= len(COMPOSABLE_SLOT_EXPRESSIONS)
+        scores[candidate] /= len(blocks)
     selected = min(scores, key=scores.get)
     return {
         "score_left": scores["candidate_left"],
@@ -388,7 +410,7 @@ def _predict_composable(
         "used_dimensions": used_dimensions,
         "omitted_dynamic_fields": [],
         "slot_distances": slot_distances,
-        "active_slots": list(COMPOSABLE_SLOT_EXPRESSIONS),
+        "active_slots": list(blocks),
     }
 
 
@@ -517,6 +539,8 @@ def _run_oof(episodes: list[dict[str, Any]], descriptor_name: str, folds: int) -
             continue
         if descriptor_name == COMPOSABLE_SLOT_FUSION:
             scalers = _fit_composable_scalers(train)
+        elif descriptor_name == TACTILE_RESPONSE_FUSION_V1:
+            scalers = _fit_block_scalers(train, TACTILE_RESPONSE_BLOCKS_V1)
         else:
             scaler = _fit_scaler(train, descriptor_name)
         for episode in test:
@@ -525,8 +549,14 @@ def _run_oof(episodes: list[dict[str, Any]], descriptor_name: str, folds: int) -
                 for key in ("run", "seed", "reference_class", "distractor_class", "changed_slots", "match_candidate")
             }
             prediction = (
-                _predict_composable(episode, scalers)
-                if descriptor_name == COMPOSABLE_SLOT_FUSION
+                _predict_block_fusion(
+                    episode,
+                    scalers,
+                    COMPOSABLE_SLOT_EXPRESSIONS
+                    if descriptor_name == COMPOSABLE_SLOT_FUSION
+                    else TACTILE_RESPONSE_BLOCKS_V1,
+                )
+                if descriptor_name in {COMPOSABLE_SLOT_FUSION, TACTILE_RESPONSE_FUSION_V1}
                 else _predict(episode, descriptor_name, scaler)
             )
             row.update({"descriptor": descriptor_name, "fold": fold, **prediction})
@@ -580,7 +610,12 @@ def main() -> int:
 
     all_rows: list[dict[str, Any]] = []
     reports: dict[str, Any] = {}
-    for descriptor_name in (*DESCRIPTORS, *GATED_DESCRIPTORS, COMPOSABLE_SLOT_FUSION):
+    for descriptor_name in (
+        *DESCRIPTORS,
+        *GATED_DESCRIPTORS,
+        COMPOSABLE_SLOT_FUSION,
+        TACTILE_RESPONSE_FUSION_V1,
+    ):
         rows = _run_oof(episodes, descriptor_name, args.folds)
         all_rows.extend(rows)
         by_change: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -605,6 +640,10 @@ def main() -> int:
                 COMPOSABLE_SLOT_FUSION: (
                     "Equal-weight public distance fusion of weight dynamic depth, roughness static geometry, "
                     "and hardness static depth."
+                ),
+                TACTILE_RESPONSE_FUSION_V1: (
+                    "Equal-weight public response-block fusion of normal static, normal dynamic, "
+                    "and surface-spatial static evidence."
                 ),
                 "grid_gradient_anisotropy_gate_4iqr": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 4 training-fold IQRs.",
                 "grid_gradient_anisotropy_gate_8iqr": "Same anisotropy vector; sensitivity gate excluding dynamic fields beyond 8 training-fold IQRs.",
@@ -648,7 +687,7 @@ def main() -> int:
             "grid_gradient_anisotropy_v0 is a transparent candidate definition, not an exact implementation of any external metric.",
             "Right-hand flow-transform variants are diagnostic only.  Future raw archives include tactile attachment poses; use them with a label-free calibration motion before freezing a common contact frame.",
             "OOF scaling is unsupervised median/IQR scaling on training-fold public values; no classifier is trained.",
-            "Composable fusion is a provisional task-external diagnostic; it must not be frozen from this report alone.",
+            "The response-block fusion is a protocol-local diagnostic; freeze its scaler only from a designated development split.",
         ],
         "descriptors": reports,
         "artifacts": {
