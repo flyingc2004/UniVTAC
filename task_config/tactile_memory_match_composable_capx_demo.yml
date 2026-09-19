@@ -29,6 +29,10 @@ live_preview_stride: 5
 live_preview_jpeg_quality: 85
 
 task_cfg_overrides:
+  # Keep the CaP-X single-seed demo to its fixed reference/match/distractor
+  # trio.  The default task scene instantiates all 16 class variants, which
+  # makes the reset settle loop prohibitively expensive for this demo.
+  compact_fixed_pair_scene: true
   reference_class_key: heavy_rough_rigid
   distractor_class_key: light_smooth_rigid
   probe_min_bilateral_ratio: 0.8
